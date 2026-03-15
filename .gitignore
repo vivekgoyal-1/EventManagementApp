@@ -1,0 +1,12 @@
+node_modules
+dist
+functions/node_modules
+functions/lib
+
+.env
+.env.local
+.env.*.local
+!.env.example
+
+.vscode
+.DS_Store

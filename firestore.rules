@@ -1,0 +1,240 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /*
+    -------------------------------------------------------------------
+    Helper Functions
+    -------------------------------------------------------------------
+    These helper functions simplify role-based access checks.
+    Roles are stored in /users/{uid}.role and used to control access.
+    */
+
+    // Ensure the request comes from an authenticated user.
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Fetch the authenticated user's profile document.
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    // Safely extract the role field from the user's document.
+    function role() {
+      return isSignedIn()
+        ? userDoc().data.role
+        : null;
+    }
+
+    // Role checks
+    function isAttendee() {
+      return role() == "attendee";
+    }
+
+    function isStageManager() {
+      return role() == "stageManager";
+    }
+
+    function isEventDirector() {
+      return role() == "eventDirector";
+    }
+
+    /*
+    This function verifies that the currently authenticated user
+    is the manager assigned to a specific session.
+
+    It reads the session document and compares managerId with
+    the authenticated user's UID.
+    */
+    function isManagerOfSession(sessionId) {
+      return isStageManager() &&
+        get(/databases/$(database)/documents/sessions/$(sessionId))
+          .data.managerId == request.auth.uid;
+    }
+
+    /*
+    -------------------------------------------------------------------
+    Sessions Collection
+    -------------------------------------------------------------------
+    Stores metadata for event sessions.
+    */
+
+    match /sessions/{sessionId} {
+
+      /*
+      READ ACCESS
+      Event Director → can read all sessions.
+      Stage Manager → can read only sessions assigned to them.
+      Attendees can also read all sessions.
+      */
+      allow read: if isSignedIn() && (
+        isEventDirector() ||
+        isAttendee() ||
+        (isStageManager() && resource.data.managerId == request.auth.uid)
+      );
+
+      /*
+      CREATE ACCESS
+      Only Event Directors are allowed to create sessions.
+      */
+      allow create: if isSignedIn() && isEventDirector();
+
+      /*
+      UPDATE / DELETE ACCESS
+      Event Director → full control.
+      Stage Manager → can modify only sessions assigned to them.
+      */
+      allow update, delete: if isSignedIn() && (
+        isEventDirector() ||
+        (isStageManager() && resource.data.managerId == request.auth.uid)
+      );
+
+      /*
+      -------------------------------------------------------------------
+      Feedback Subcollection
+      sessions/{sessionId}/feedback/{feedbackId}
+      -------------------------------------------------------------------
+      Stores attendee feedback for sessions.
+      */
+
+      match /feedback/{feedbackId} {
+
+        /*
+        CREATE
+        Attendees can submit feedback.
+
+        Stage Managers are also allowed to create feedback within their
+        assigned session if the application allows moderated feedback
+        entry from managers.
+        */
+        allow create: if isSignedIn() && (
+          isAttendee() ||
+          isManagerOfSession(sessionId)
+        );
+
+        /*
+        READ
+        Stage Managers can read feedback only for sessions assigned to them.
+        Event Directors can read feedback across the entire event.
+        */
+        allow read: if isSignedIn() && (
+          isEventDirector() ||
+          isManagerOfSession(sessionId)
+        );
+
+        /*
+        UPDATE / DELETE
+        Feedback documents are immutable once created.
+        No user (including Event Director) can modify or delete feedback.
+        */
+        allow update, delete: if false;
+      }
+    }
+
+    /*
+    -------------------------------------------------------------------
+    Global Feedback Mirror Collection
+    feedback/{feedbackId}
+    -------------------------------------------------------------------
+    Mirrors feedback from session subcollections for report queries.
+    Client writes are not allowed here; writes are performed by Cloud Functions.
+    */
+
+    match /feedback/{feedbackId} {
+
+      /*
+      READ
+      Event Director -> can read all feedback.
+      Stage Manager -> can read feedback only when:
+        - feedback.managerId is their uid, and
+        - they are still assigned manager of feedback.sessionId.
+      */
+      allow read: if isSignedIn() && (
+        isEventDirector() ||
+        (
+          isStageManager() &&
+          resource.data.managerId == request.auth.uid &&
+          isManagerOfSession(resource.data.sessionId)
+        )
+      );
+
+      /*
+      WRITE
+      Deny all client writes (create/update/delete).
+      This prevents attendees/directors/managers from mutating mirrored data.
+      */
+      allow write: if false;
+    }
+
+    /*
+    -------------------------------------------------------------------
+    Event Statistics Collection
+    -------------------------------------------------------------------
+    Aggregated statistics for the entire event (used by director dashboard).
+    */
+
+    match /eventStats/{docId} {
+
+      // Only Event Directors can read event-level analytics.
+      allow read: if isSignedIn() && isEventDirector();
+
+      // Statistics are updated only via backend Cloud Functions.
+      allow write: if false;
+    }
+
+    /*
+    -------------------------------------------------------------------
+    Manager Daily Statistics
+    -------------------------------------------------------------------
+    Stores per-day performance metrics for each Stage Manager.
+    Used for trend analysis and reporting dashboards.
+    */
+
+    match /managerDailyStats/{docId} {
+
+      /*
+      READ
+      Event Director → can read all manager statistics.
+      Stage Manager → can read only their own statistics.
+      */
+      allow read: if isSignedIn() && (
+        isEventDirector() ||
+        (isStageManager() && resource.data.managerId == request.auth.uid)
+      );
+
+      // Updates happen only through backend aggregation functions.
+      allow write: if false;
+    }
+
+    /*
+    -------------------------------------------------------------------
+    Users Collection
+    -------------------------------------------------------------------
+    Stores basic user profile information including role.
+    */
+
+    match /users/{userId} {
+
+      // Users can read their own profile to determine role.
+      allow read: if isSignedIn() && userId == request.auth.uid;
+
+      // Profiles are managed only by backend logic.
+      allow write: if false;
+    }
+
+    /*
+    -------------------------------------------------------------------
+    Default Deny Rule
+    -------------------------------------------------------------------
+    Any document path not explicitly covered above is denied.
+    This ensures no accidental public access.
+    */
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+  }
+}

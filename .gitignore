@@ -10,3 +10,4 @@ functions/lib
 
 .vscode
 .DS_Store
+.firebase/

@@ -1,6 +1,7 @@
 {
   "projects": {
-    "best": "aroleap-assignment-vivek"
+    "best": "aroleap-assignment-vivek",
+    "default": "aroleap-assignment-vivek"
   },
   "targets": {},
   "etags": {}

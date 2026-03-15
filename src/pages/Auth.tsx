@@ -55,17 +55,22 @@ export default function AuthPage() {
   }
 
   return (
-    <div className="mx-auto max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <section className="mx-auto max-w-md space-y-4">
+      <h1 className="rounded-lg bg-indigo-500 px-4 py-3 text-center text-xl font-bold uppercase tracking-wider text-white">
+        Event Management Application
+      </h1>
 
-      <h2 className="text-2xl font-semibold text-slate-900 text-center">
-        {mode === "login" ? "Sign in" : "Create account"}
-      </h2>
+      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
 
-      <p className="mt-2 text-sm text-slate-600 text-center">
-        Use Google or email and password
-      </p>
+        <h2 className="text-2xl font-semibold text-slate-900 text-center">
+          {mode === "login" ? "Sign in" : "Create account"}
+        </h2>
 
-      <div className="mt-5 grid grid-cols-2 gap-2">
+        <p className="mt-2 text-sm text-slate-600 text-center">
+          Use Google or email and password
+        </p>
+
+        <div className="mt-5 grid grid-cols-2 gap-2">
         <button
           onClick={() => setMode("login")}
           className={`rounded-md px-3 py-2 text-sm font-medium transition ${
@@ -87,9 +92,9 @@ export default function AuthPage() {
         >
           Register
         </button>
-      </div>
+        </div>
 
-      <form onSubmit={handleEmailAuth} className="mt-5 space-y-4">
+        <form onSubmit={handleEmailAuth} className="mt-5 space-y-4">
 
         <div>
           <label className="text-xs uppercase tracking-wider text-slate-500">
@@ -138,16 +143,17 @@ export default function AuthPage() {
             ? "Login with Email"
             : "Register with Email"}
         </button>
-      </form>
+        </form>
 
-      <div className="my-5 h-px bg-slate-200" />
+        <div className="my-5 h-px bg-slate-200" />
 
-      <button
-        onClick={signInWithGoogle}
-        className="w-full rounded-md bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-900 transition hover:bg-cyan-400"
-      >
-        Continue with Google
-      </button>
-    </div>
+        <button
+          onClick={signInWithGoogle}
+          className="w-full rounded-md bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-900 transition hover:bg-cyan-400"
+        >
+          Continue with Google
+        </button>
+      </div>
+    </section>
   )
 }

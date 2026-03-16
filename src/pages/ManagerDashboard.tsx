@@ -124,46 +124,70 @@ function SessionCard({ session, onCopy, copied }: {
 function DailyAverageGraph({ data }: { data: ManagerDailyStats[] }) {
   if (data.length === 0) {
     return (
-      <div className="flex items-center justify-center h-40 text-sm text-zinc-400">
-        No daily stats yet
+      <div className="flex items-center justify-center h-40 rounded-xl border border-dashed border-zinc-200 text-sm text-zinc-400">
+        No history yet — graph populates as feedback arrives each day
       </div>
     )
   }
 
   const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date))
 
-  const points = sorted.map((d, idx) => {
-    const x = (idx / Math.max(sorted.length - 1, 1)) * 100
-    const y = 100 - Math.max(0, Math.min(5, d.averageRating)) * 20
-    return `${x},${y}`
-  })
+  // Dynamic Y scale: pad 0.3 above and below the data range, clamped to 1–5
+  const ratings = sorted.map((d) => d.averageRating)
+  const dataMin = Math.max(1, Math.min(...ratings) - 0.3)
+  const dataMax = Math.min(5, Math.max(...ratings) + 0.3)
+  const range = dataMax - dataMin || 1
 
-  const areaPoints = `0,100 ${points.join(" ")} 100,100`
+  const toY = (r: number) => 100 - ((r - dataMin) / range) * 90 - 5  // 5–95 band
+
+  // Handle single data point: draw a flat horizontal line
+  const rawPoints = sorted.length === 1
+    ? [[0, toY(sorted[0].averageRating)], [100, toY(sorted[0].averageRating)]]
+    : sorted.map((d, idx) => [
+        (idx / (sorted.length - 1)) * 100,
+        toY(d.averageRating),
+      ])
+
+  const pointStr = rawPoints.map(([x, y]) => `${x},${y}`).join(" ")
+  const areaPoints = `0,100 ${pointStr} 100,100`
+
+  const gridRatings = [Math.ceil(dataMin * 2) / 2, Math.round((dataMin + dataMax) / 2 * 2) / 2, Math.floor(dataMax * 2) / 2]
+    .filter((v, i, a) => a.indexOf(v) === i)
 
   return (
-    <svg viewBox="0 0 100 100" className="h-40 w-full" preserveAspectRatio="none">
-      <defs>
-        <linearGradient id="graphGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#E62B1E" stopOpacity="0.15" />
-          <stop offset="100%" stopColor="#E62B1E" stopOpacity="0" />
-        </linearGradient>
-      </defs>
+    <div className="relative">
+      {/* Y-axis labels */}
+      <div className="absolute left-0 top-0 bottom-0 flex flex-col justify-between text-right pr-2 py-1 pointer-events-none">
+        <span className="text-xs text-zinc-400 leading-none">{dataMax.toFixed(1)}★</span>
+        <span className="text-xs text-zinc-400 leading-none">{dataMin.toFixed(1)}★</span>
+      </div>
 
-      {[20, 40, 60, 80].map((y) => (
-        <line key={y} x1="0" y1={y} x2="100" y2={y} stroke="#f4f4f5" strokeWidth="0.8" />
-      ))}
+      <div className="ml-10">
+        <svg viewBox="0 0 100 100" className="h-40 w-full" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="graphGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#E62B1E" stopOpacity="0.18" />
+              <stop offset="100%" stopColor="#E62B1E" stopOpacity="0" />
+            </linearGradient>
+          </defs>
 
-      <polygon fill="url(#graphGrad)" points={areaPoints} />
+          {gridRatings.map((r) => (
+            <line key={r} x1="0" y1={toY(r)} x2="100" y2={toY(r)} stroke="#f4f4f5" strokeWidth="0.8" />
+          ))}
 
-      <polyline
-        fill="none"
-        stroke="#E62B1E"
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-        points={points.join(" ")}
-      />
-    </svg>
+          <polygon fill="url(#graphGrad)" points={areaPoints} />
+
+          <polyline
+            fill="none"
+            stroke="#E62B1E"
+            strokeWidth="1.5"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            points={pointStr}
+          />
+        </svg>
+      </div>
+    </div>
   )
 }
 
@@ -356,14 +380,20 @@ export default function ManagerDashboard() {
       <div className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-6">
         <div className="flex items-center justify-between mb-1">
           <h2 className="text-sm font-semibold text-zinc-900">Daily Average Rating</h2>
-          <span className="text-xs text-zinc-400">365-day history</span>
+          <span className="text-xs text-zinc-400">{dailyStats.length} day{dailyStats.length !== 1 ? "s" : ""} of data</span>
         </div>
-        <p className="text-xs text-zinc-400 mb-4">1.0 – 5.0 scale</p>
+        <p className="text-xs text-zinc-400 mb-4">Auto-scaled · updates as feedback arrives</p>
         <DailyAverageGraph data={dailyStats} />
-        <div className="flex justify-between mt-2">
-          <span className="text-xs text-zinc-400">365 days ago</span>
-          <span className="text-xs text-zinc-400">Today</span>
-        </div>
+        {dailyStats.length > 0 && (
+          <div className="flex justify-between mt-2 ml-10">
+            <span className="text-xs text-zinc-400">
+              {[...dailyStats].sort((a, b) => a.date.localeCompare(b.date))[0]?.date}
+            </span>
+            <span className="text-xs text-zinc-400">
+              {[...dailyStats].sort((a, b) => b.date.localeCompare(a.date))[0]?.date}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Critical feedback */}

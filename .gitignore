@@ -9,5 +9,8 @@ functions/lib
 !.env.example
 
 .vscode
+.claude
 .DS_Store
 .firebase/
+firebase-debug.log
+*.log

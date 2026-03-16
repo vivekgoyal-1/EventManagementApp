@@ -1,4 +1,9 @@
-/* Reset + box sizing */
+@import "tailwindcss";
+
+@theme {
+  --color-ted: #E62B1E;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
 
 *,
 *::before,
@@ -6,34 +11,24 @@
   box-sizing: border-box;
 }
 
-/* Base page styles */
-
 body {
   margin: 0;
-
-  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-
-  background-color: #f8fafc;
-  color: #0f172a;
-
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background-color: #f4f4f5;
+  color: #18181b;
   line-height: 1.5;
-
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Better text rendering */
-
 h1, h2, h3, h4, h5, h6 {
   margin: 0;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 p {
   margin: 0;
 }
-
-/* Improve inputs globally */
 
 input,
 select,
@@ -42,27 +37,30 @@ button {
   font-family: inherit;
 }
 
-/* Smooth button transitions */
-
 button {
+  cursor: pointer;
   transition: all 0.15s ease;
 }
 
-/* Improve scrollbar (Chrome/Edge) */
-
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cbd5f5;
-  border-radius: 4px;
+  background: #d4d4d8;
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: #a1a1aa;
+}
+
+/* Number tabular figures */
+.tabular {
+  font-variant-numeric: tabular-nums;
 }

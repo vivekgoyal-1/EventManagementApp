@@ -103,16 +103,21 @@ service cloud.firestore {
 
         /*
         CREATE
-        Attendees can submit feedback.
+        Only authenticated attendees can submit feedback.
+        Managers are explicitly excluded to prevent falsification.
 
-        Stage Managers are also allowed to create feedback within their
-        assigned session if the application allows moderated feedback
-        entry from managers.
+        Two additional guards are enforced at the database level:
+        1. Access code: the submitted code must match the session's stored code,
+           ensuring only attendees who received the code from their manager can submit.
+        2. One submission per user per session: checked by verifying that no
+           submittedBy document exists for this user on this session yet.
         */
-        allow create: if isSignedIn() && (
-          isAttendee() ||
-          isManagerOfSession(sessionId)
-        );
+        allow create: if isSignedIn() &&
+          isAttendee() &&
+          request.resource.data.userId == request.auth.uid &&
+          request.resource.data.accessCode ==
+            get(/databases/$(database)/documents/sessions/$(sessionId)).data.accessCode &&
+          !exists(/databases/$(database)/documents/sessions/$(sessionId)/submittedBy/$(request.auth.uid));
 
         /*
         READ
@@ -130,6 +135,30 @@ service cloud.firestore {
         No user (including Event Director) can modify or delete feedback.
         */
         allow update, delete: if false;
+      }
+
+      /*
+      -------------------------------------------------------------------
+      Submitted-by Tracker
+      sessions/{sessionId}/submittedBy/{userId}
+      -------------------------------------------------------------------
+      Written by the client (alongside feedback) and by Cloud Functions.
+      The existence of this document is what the feedback create rule checks
+      to enforce one-submission-per-user-per-session.
+      */
+      match /submittedBy/{userId} {
+
+        // Attendees can record their own submission marker.
+        allow create: if isSignedIn() && isAttendee() && userId == request.auth.uid;
+
+        // Immutable once created; prevents self-deletion to re-enable submission.
+        allow update, delete: if false;
+
+        // Managers and directors can audit who has submitted.
+        allow read: if isSignedIn() && (
+          isEventDirector() ||
+          isManagerOfSession(sessionId)
+        );
       }
     }
 

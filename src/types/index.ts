@@ -30,6 +30,8 @@ export interface Session {
   totalFeedback?: number
   avgRating?: number
 
+  accessCode?: string
+
   metadata?: Record<string, unknown>
   participants?: string[]
 }

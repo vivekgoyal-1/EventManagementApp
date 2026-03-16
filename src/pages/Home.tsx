@@ -1,4 +1,3 @@
-import { SignOutButton } from "../components/SignOutButton"
 import FeedbackForm from "../components/FeedbackForm"
 import { useAuth } from "../hooks/useAuth"
 
@@ -6,35 +5,30 @@ export default function HomePage() {
   const { user } = useAuth()
 
   return (
-    <section className="space-y-6">
+    <div className="max-w mx-auto space-y-6">
 
-      <div className="flex items-start justify-between">
-
-        <div>
-          <h2 className="text-2xl font-semibold text-slate-900">
-            Feedback
-          </h2>
-
-          <p className="text-sm text-slate-600">
-            Submit your session feedback here
-          </p>
-
-          <p className="text-sm text-slate-500 mt-1">
-            Signed in as: {user?.displayName || user?.email}
-          </p>
-        </div>
-
-        <SignOutButton />
-      </div>
-
-      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-        <p className="text-slate-600">
-          Choose your session, rate it, and submit your feedback.
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-widest text-ted mb-1">
+          Attendee
+        </p>
+        <h1 className="text-2xl font-black text-zinc-900">Submit Feedback</h1>
+        <p className="text-sm text-zinc-500 mt-1">
+          Signed in as {user?.displayName || user?.email}
         </p>
       </div>
 
-      <FeedbackForm />
+      <div className="rounded-2xl border border-zinc-100 bg-white shadow-sm p-6">
 
-    </section>
+        <div className="mb-5 rounded-xl bg-zinc-50 border border-zinc-100 px-4 py-3">
+          <p className="text-sm text-zinc-600">
+            Select your session, enter the access code from your Stage Manager, rate the talk, and leave a comment.
+          </p>
+        </div>
+
+        <FeedbackForm />
+
+      </div>
+
+    </div>
   )
 }

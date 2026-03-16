@@ -1,4 +1,3 @@
-
 import { ReactNode } from "react"
 import { Navigate, Route, Routes } from "react-router-dom"
 import { useAuth } from "./hooks/useAuth"
@@ -9,22 +8,16 @@ import ManagerDashboard from "./pages/ManagerDashboard"
 import AuthPage from "./pages/Auth"
 import RoleManagementPage from "./pages/RoleManagement"
 import SessionManagementPage from "./pages/SessionManagement"
+import SessionDetail from "./pages/SessionDetail"
 
 import Sidebar from "./components/Sidebar"
 
-function AppShell({
-  children,
-  showSidebar,
-}: {
-  children: ReactNode
-  showSidebar: boolean
-}) {
+function AppShell({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-screen bg-slate-100 flex">
-      {showSidebar && <Sidebar />}
-
-      <main className={showSidebar ? "flex-1 p-6" : "w-full p-6"}>
-        <div className="mx-auto max-w-6xl">
+    <div className="flex min-h-screen bg-zinc-100">
+      <Sidebar />
+      <main className="flex-1 min-w-0 overflow-y-auto">
+        <div className="max-w-5xl mx-auto px-6 py-8">
           {children}
         </div>
       </main>
@@ -43,18 +36,15 @@ function ProtectedRoute({
   requiredRole?: string
   children: ReactNode
 }) {
-
   if (loading) {
     return (
-      <div className="text-center py-6 text-slate-600">
-        Loading...
+      <div className="flex items-center justify-center min-h-32 text-zinc-400 text-sm">
+        Loading…
       </div>
     )
   }
 
-  if (!user) {
-    return <Navigate to="/" replace />
-  }
+  if (!user) return <Navigate to="/" replace />
 
   if (requiredRole && user.role !== requiredRole) {
     return <Navigate to="/" replace />
@@ -64,48 +54,45 @@ function ProtectedRoute({
 }
 
 export default function App() {
-
   const { user, loading } = useAuth()
 
   if (loading) {
     return (
-      <div className="text-center py-10 text-slate-600">
-        Loading...
+      <div className="flex items-center justify-center min-h-screen bg-zinc-950">
+        <div className="text-center">
+          <p className="text-ted text-3xl font-black tracking-tight">EFP</p>
+          <p className="text-zinc-500 text-sm mt-1">Loading…</p>
+        </div>
       </div>
     )
   }
 
-  return (
-    <AppShell showSidebar={Boolean(user)}>
+  if (!user) return <AuthPage />
 
+  return (
+    <AppShell>
       <Routes>
 
         <Route
           path="/"
           element={
-            user
-              ? <Navigate
-                  to={
-                    user.role === "eventDirector"
-                      ? "/director"
-                      : user.role === "stageManager"
-                      ? "/manager"
-                      : "/home"
-                  }
-                  replace
-                />
-              : <AuthPage />
+            <Navigate
+              to={
+                user.role === "eventDirector"
+                  ? "/director"
+                  : user.role === "stageManager"
+                  ? "/manager"
+                  : "/home"
+              }
+              replace
+            />
           }
         />
 
         <Route
           path="/home"
           element={
-            <ProtectedRoute
-              user={user}
-              loading={loading}
-              requiredRole="attendee"
-            >
+            <ProtectedRoute user={user} loading={loading} requiredRole="attendee">
               <HomePage />
             </ProtectedRoute>
           }
@@ -114,11 +101,7 @@ export default function App() {
         <Route
           path="/manager"
           element={
-            <ProtectedRoute
-              user={user}
-              loading={loading}
-              requiredRole="stageManager"
-            >
+            <ProtectedRoute user={user} loading={loading} requiredRole="stageManager">
               <ManagerDashboard />
             </ProtectedRoute>
           }
@@ -127,11 +110,7 @@ export default function App() {
         <Route
           path="/director"
           element={
-            <ProtectedRoute
-              user={user}
-              loading={loading}
-              requiredRole="eventDirector"
-            >
+            <ProtectedRoute user={user} loading={loading} requiredRole="eventDirector">
               <EventDirectorDashboard />
             </ProtectedRoute>
           }
@@ -140,11 +119,7 @@ export default function App() {
         <Route
           path="/director/roles"
           element={
-            <ProtectedRoute
-              user={user}
-              loading={loading}
-              requiredRole="eventDirector"
-            >
+            <ProtectedRoute user={user} loading={loading} requiredRole="eventDirector">
               <RoleManagementPage />
             </ProtectedRoute>
           }
@@ -153,12 +128,17 @@ export default function App() {
         <Route
           path="/director/sessions"
           element={
-            <ProtectedRoute
-              user={user}
-              loading={loading}
-              requiredRole="eventDirector"
-            >
+            <ProtectedRoute user={user} loading={loading} requiredRole="eventDirector">
               <SessionManagementPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/session/:sessionId"
+          element={
+            <ProtectedRoute user={user} loading={loading}>
+              <SessionDetail />
             </ProtectedRoute>
           }
         />
@@ -166,7 +146,6 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
 
       </Routes>
-
     </AppShell>
   )
 }

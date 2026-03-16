@@ -140,9 +140,17 @@ export const onFeedbackCreated = onDocumentCreated(
     if (feedback.skipAggregation === true) return;
 
     const rating = Number(feedback.rating ?? 0);
+    const managerId = String(feedback.managerId ?? "");
+    const userId = String(feedback.userId ?? "");
 
     const sessionRef = db.collection("sessions").doc(sessionId);
     const statsRef = db.collection("eventStats").doc("global");
+
+    const now = new Date();
+    const dateStr = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
+    const dailyRef = managerId
+      ? db.collection("managerDailyStats").doc(`${managerId}_${dateStr}`)
+      : null;
 
     await db.runTransaction(async (tx) => {
 
@@ -178,7 +186,38 @@ export const onFeedbackCreated = onDocumentCreated(
         },
         { merge: true },
       );
+
+      if (dailyRef) {
+        const dailyDoc = await tx.get(dailyRef);
+        const prevDailySum = Number(dailyDoc.data()?.ratingSum ?? 0);
+        const prevDailyCount = Number(dailyDoc.data()?.feedbackReceived ?? 0);
+        const newDailyCount = prevDailyCount + 1;
+        const newDailySum = prevDailySum + rating;
+
+        tx.set(
+          dailyRef,
+          {
+            managerId,
+            date: dateStr,
+            sessionsHosted: dailyDoc.data()?.sessionsHosted ?? 1,
+            feedbackReceived: newDailyCount,
+            ratingSum: newDailySum,
+            averageRating: Number((newDailySum / newDailyCount).toFixed(2)),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true },
+        );
+      }
     });
+
+    if (userId) {
+      await db
+        .collection("sessions")
+        .doc(sessionId)
+        .collection("submittedBy")
+        .doc(userId)
+        .set({ userId, submittedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    }
 
     logger.info("Updated aggregates for session", sessionId);
   },
@@ -195,8 +234,8 @@ function buildSummary(comments: string[], ratings: number[]) {
   return {
     wentWell:
       positive / total >= 0.6
-        ? " this is coded Audience sentiment was mostly positive."
-        : " this is coded Audience feedback was mixed.",
+        ? "Audience sentiment was mostly positive."
+        : "Audience feedback was mixed.",
 
     didntGoWell:
       low > 0
@@ -465,8 +504,8 @@ export const seedDummyData = onCall({ region: REGION }, async (request) => {
   const DEMO_PASSWORD = "Pulse@123";
   const demoUsers = [
     { email: "director@pulse.local", displayName: "Event Director", role: "eventDirector" as UserRole },
-    { email: "manager1@pulse.local", displayName: "Stage Manager One", role: "stageManager" as UserRole },
-    { email: "manager2@pulse.local", displayName: "Stage Manager Two", role: "stageManager" as UserRole },
+    { email: "manager1@pulse.local", displayName: "Priya Sharma", role: "stageManager" as UserRole },
+    { email: "manager2@pulse.local", displayName: "James Okafor", role: "stageManager" as UserRole },
     { email: "attendee1@pulse.local", displayName: "Attendee One", role: "attendee" as UserRole },
     { email: "attendee2@pulse.local", displayName: "Attendee Two", role: "attendee" as UserRole },
   ];
@@ -497,112 +536,315 @@ export const seedDummyData = onCall({ region: REGION }, async (request) => {
 
   const manager1Uid = userMap.get("manager1@pulse.local");
   const manager2Uid = userMap.get("manager2@pulse.local");
-  if (!manager1Uid || !manager2Uid) {
-    throw new HttpsError("internal", "Failed to resolve demo managers.");
+  const attendee1Uid = userMap.get("attendee1@pulse.local");
+  const attendee2Uid = userMap.get("attendee2@pulse.local");
+
+  if (!manager1Uid || !manager2Uid || !attendee1Uid || !attendee2Uid) {
+    throw new HttpsError("internal", "Failed to resolve demo users.");
   }
 
-  const demoSessions = [
-    { id: "session-ai-future", title: "The Future of AI", managerId: manager1Uid, managerEmail: "manager1@pulse.local", managerName: "Stage Manager One", avgRating: 4.5, totalFeedback: 6, ratingSum: 27 },
-    { id: "session-climate-action", title: "Climate Action Now", managerId: manager1Uid, managerEmail: "manager1@pulse.local", managerName: "Stage Manager One", avgRating: 3.9, totalFeedback: 5, ratingSum: 19.5 },
-    { id: "session-design-minds", title: "Designing Better Minds", managerId: manager1Uid, managerEmail: "manager1@pulse.local", managerName: "Stage Manager One", avgRating: 2.7, totalFeedback: 5, ratingSum: 13.5 },
-    { id: "session-health-innov", title: "Health Innovation", managerId: manager1Uid, managerEmail: "manager1@pulse.local", managerName: "Stage Manager One", avgRating: 4.1, totalFeedback: 5, ratingSum: 20.5 },
-    { id: "session-ethics-scale", title: "Ethics at Scale", managerId: manager2Uid, managerEmail: "manager2@pulse.local", managerName: "Stage Manager Two", avgRating: 3.2, totalFeedback: 5, ratingSum: 16 },
-    { id: "session-city-future", title: "Future Cities", managerId: manager2Uid, managerEmail: "manager2@pulse.local", managerName: "Stage Manager Two", avgRating: 4.7, totalFeedback: 6, ratingSum: 28.2 },
-    { id: "session-edu-evolve", title: "Education Evolved", managerId: manager2Uid, managerEmail: "manager2@pulse.local", managerName: "Stage Manager Two", avgRating: 2.5, totalFeedback: 4, ratingSum: 10 },
-    { id: "session-human-story", title: "The Human Story", managerId: manager2Uid, managerEmail: "manager2@pulse.local", managerName: "Stage Manager Two", avgRating: 3.8, totalFeedback: 5, ratingSum: 19 },
+  const now = new Date();
+
+  function daysAgo(n: number): Date {
+    const d = new Date(now);
+    d.setUTCHours(14, 0, 0, 0);
+    d.setUTCDate(d.getUTCDate() - n);
+    return d;
+  }
+
+  function feedbackTs(sessionDate: Date, minutesAfterStart: number): admin.firestore.Timestamp {
+    return admin.firestore.Timestamp.fromDate(
+      new Date(sessionDate.getTime() + minutesAfterStart * 60 * 1000),
+    );
+  }
+
+  // 4 sessions total — one per day over the last 4 days; 2 per manager
+  const sessions = [
+    {
+      id: "session-ai-healthcare",
+      title: "The Future of AI in Healthcare",
+      managerId: manager1Uid,
+      managerEmail: "manager1@pulse.local",
+      managerName: "Priya Sharma",
+      accessCode: "AH2025",
+      date: daysAgo(4),
+    },
+    {
+      id: "session-urban-mobility",
+      title: "Rethinking Urban Mobility",
+      managerId: manager2Uid,
+      managerEmail: "manager2@pulse.local",
+      managerName: "James Okafor",
+      accessCode: "UM2025",
+      date: daysAgo(3),
+    },
+    {
+      id: "session-ocean-tech",
+      title: "Ocean Conservation and Technology",
+      managerId: manager1Uid,
+      managerEmail: "manager1@pulse.local",
+      managerName: "Priya Sharma",
+      accessCode: "OC2025",
+      date: daysAgo(2),
+    },
+    {
+      id: "session-mental-health",
+      title: "Mental Health in the Digital Age",
+      managerId: manager2Uid,
+      managerEmail: "manager2@pulse.local",
+      managerName: "James Okafor",
+      accessCode: "MH2025",
+      date: daysAgo(1),
+    },
   ];
 
-  const now = new Date();
-  for (const session of demoSessions) {
+  // Realistic feedback per session: 25 entries each, varied ratings, realistic TED-style comments
+  const feedbackBySessions: Record<string, Array<{ rating: number; comment: string }>> = {
+    "session-ai-healthcare": [
+      { rating: 5, comment: "Incredibly inspiring. The speaker's research on early cancer detection using AI is exactly the kind of innovation the world needs." },
+      { rating: 5, comment: "Best talk of the event. Clear, evidence-based, and delivered with genuine passion." },
+      { rating: 5, comment: "The live demo of the diagnostic tool was mind-blowing. I work in radiology and this is exactly where the field is heading." },
+      { rating: 5, comment: "Left with three concrete ideas I want to share with my team on Monday. Phenomenal content." },
+      { rating: 5, comment: "A perfect blend of personal story and hard science. Emotional without being manipulative." },
+      { rating: 5, comment: "The statistics on misdiagnosis rates were sobering but the AI solution gave genuine hope." },
+      { rating: 5, comment: "One of the most technically credible TEDx talks I have ever attended. Real data, real impact." },
+      { rating: 5, comment: "This is why I come to TEDx. Left feeling genuinely optimistic about where healthcare is going." },
+      { rating: 5, comment: "Standing ovation material. The speaker handled the ethical questions from the audience brilliantly." },
+      { rating: 5, comment: "The speaker's energy and expertise were evident in every sentence. Exceptional." },
+      { rating: 4, comment: "Really strong talk. A couple of slides were text-heavy and hard to read from the back rows." },
+      { rating: 4, comment: "Impressive research. Would have liked more discussion on the regulatory approval process." },
+      { rating: 4, comment: "Great talk overall. The opening story about the misdiagnosis patient was particularly powerful." },
+      { rating: 4, comment: "Very engaging. The speaker could slow down in the technical sections for a non-specialist audience." },
+      { rating: 4, comment: "Excellent substance. The stage presence was a bit stiff early on but the speaker warmed up nicely." },
+      { rating: 4, comment: "Strong presentation. The AI accuracy numbers were compelling — citing sources would help credibility." },
+      { rating: 4, comment: "Really valuable session. Minor note: the live demo had a moment of lag that disrupted the flow." },
+      { rating: 4, comment: "Excellent overall. Ran about 5 minutes over, which cut into Q&A time." },
+      { rating: 3, comment: "Interesting topic but felt like a lot of the claims needed more context to fully evaluate." },
+      { rating: 3, comment: "Good foundation but the second half lost momentum. More concrete case studies would have helped." },
+      { rating: 3, comment: "Decent talk. The speaker knows the material but struggled to make it accessible to non-technical attendees." },
+      { rating: 3, comment: "Some interesting points buried under too much jargon. Needed a sharper narrative." },
+      { rating: 3, comment: "Middle of the road. The topic deserves a more focused angle." },
+      { rating: 2, comment: "The speaker overestimated how much the audience knew about machine learning. Lost me by slide 4." },
+      { rating: 2, comment: "Too much jargon. The ideas might be good but they were not communicated clearly enough for a general audience." },
+    ],
+    "session-urban-mobility": [
+      { rating: 5, comment: "This is the talk I will be recommending to every urban planner I know. Concrete, visionary, and actionable." },
+      { rating: 5, comment: "The speaker dismantled my assumptions about car-centric city design in 18 minutes flat. Extraordinary." },
+      { rating: 5, comment: "Brilliant. The before-and-after city case studies made the abstract tangible and the argument impossible to refute." },
+      { rating: 5, comment: "Loved every minute. The ideas about 15-minute cities have changed how I think about where I live." },
+      { rating: 5, comment: "One of the most coherent arguments for a policy shift I have ever heard in a public forum." },
+      { rating: 5, comment: "Stunning presentation. Great balance of global research and personal experience as a daily commuter." },
+      { rating: 5, comment: "The speaker's energy was infectious. Left wanting to take action immediately." },
+      { rating: 5, comment: "Excellent use of data visualisations. Complex urban data made genuinely understandable and compelling." },
+      { rating: 4, comment: "Very strong talk. Would have liked a bit more on implementation challenges in lower-income cities." },
+      { rating: 4, comment: "Engaging and well-paced. The humour landed well and kept the energy up throughout." },
+      { rating: 4, comment: "Great content. The final 3 minutes felt rushed — more time on the actionable framework would have helped." },
+      { rating: 4, comment: "Really informative. The speaker clearly lives and breathes this topic." },
+      { rating: 4, comment: "Excellent session. Some of the statistics would benefit from source citations on the slides." },
+      { rating: 4, comment: "Compelling argument. The counterargument to urban sprawl was particularly well constructed." },
+      { rating: 4, comment: "Well researched and clearly presented. Left with a lot to think about and share with colleagues." },
+      { rating: 4, comment: "Very good. The Q&A was especially strong — the speaker handled pushback gracefully." },
+      { rating: 4, comment: "Strong visual storytelling. The city map animations were particularly effective." },
+      { rating: 4, comment: "Solid presentation. The interactive element mid-talk was a fun and unexpected touch." },
+      { rating: 3, comment: "Good ideas but the talk needed a sharper conclusion. It ended somewhat abruptly." },
+      { rating: 3, comment: "Decent content. Some sections felt more like a policy lecture than a TED talk." },
+      { rating: 3, comment: "The first half was excellent; the second half lost its shape a bit." },
+      { rating: 3, comment: "Interesting but the proposed solutions are harder to implement than the talk implied." },
+      { rating: 3, comment: "Good foundation. More specificity on financing models would have elevated it considerably." },
+      { rating: 2, comment: "Felt like a policy briefing rather than a TEDx talk. Needed more of a human story to anchor it." },
+      { rating: 2, comment: "The ideas are sound but this particular speaker is not the right messenger for this topic." },
+    ],
+    "session-ocean-tech": [
+      { rating: 5, comment: "Absolutely captivating. The drone footage alone was worth attending. A stunning presentation on a critical issue." },
+      { rating: 5, comment: "Rare to see technology and conservation come together so thoughtfully. Genuinely moved by the end." },
+      { rating: 5, comment: "The speaker's personal commitment to this cause came through in every slide. Truly inspiring." },
+      { rating: 4, comment: "Good session. The data on microplastics was alarming in the right way — motivating rather than paralyzing." },
+      { rating: 4, comment: "Well delivered. The section on bio-acoustic monitoring was new to me and genuinely fascinating." },
+      { rating: 4, comment: "Solid talk with a clear message. More time on the tech solutions would have made it exceptional." },
+      { rating: 4, comment: "Engaging and relevant. The call to action at the end was practical and specific." },
+      { rating: 4, comment: "Good pacing. The speaker connected global data to local action effectively." },
+      { rating: 3, comment: "Worthwhile topic but the talk felt like an overview rather than a deep dive into any single innovation." },
+      { rating: 3, comment: "Decent. Some interesting technology mentioned but not explored in enough depth to be truly useful." },
+      { rating: 3, comment: "The slides were busy. Key data points got lost in the visual clutter." },
+      { rating: 3, comment: "Relevant content but the structure was a bit disjointed. Hard to follow the main thesis." },
+      { rating: 3, comment: "Some genuinely interesting moments but also some padding that could have been cut." },
+      { rating: 3, comment: "Good intentions, moderate execution. The technology case studies were underdeveloped." },
+      { rating: 3, comment: "Topic is important. Presentation was average — could have been far more impactful." },
+      { rating: 3, comment: "Some good points buried in too much general context about ocean ecosystems." },
+      { rating: 3, comment: "Fair talk. The speaker seemed more comfortable with conservation than with the technology side." },
+      { rating: 3, comment: "Middle of the road. Needed either more depth on the tech or a tighter focus on one solution." },
+      { rating: 2, comment: "Expected more on the actual technology being deployed. Felt like an awareness session, not a TEDx talk." },
+      { rating: 2, comment: "The speaker lost the thread in the middle section. Hard to see how the examples connected." },
+      { rating: 2, comment: "Too surface-level. This could have been a 5-minute video. Not TEDx worthy." },
+      { rating: 2, comment: "Weak structure. The statistics cited felt dated and were not properly sourced." },
+      { rating: 2, comment: "Overlong for the amount of new information conveyed. Could have been half the length." },
+      { rating: 1, comment: "Very poor. The speaker spent 8 minutes on background the audience already knew. No original ideas." },
+      { rating: 1, comment: "Had high hopes but this was unfocused and underdelivered. The drone footage was great; everything else was not." },
+    ],
+    "session-mental-health": [
+      { rating: 5, comment: "This talk will stay with me for a long time. The speaker's personal vulnerability made it genuinely powerful." },
+      { rating: 5, comment: "Exactly what the conversation around mental health needs. Evidence-based, compassionate, and actionable." },
+      { rating: 5, comment: "I came in sceptical of another mental health talk and left completely convinced. Exceptional in every way." },
+      { rating: 5, comment: "The framework the speaker introduced for digital-physical balance is something I am implementing immediately." },
+      { rating: 5, comment: "Stunning. The data on teen anxiety and social media use was presented without sensationalism." },
+      { rating: 5, comment: "Genuinely moving. The section on children's screen time was handled with real care and nuance." },
+      { rating: 5, comment: "The speaker has a remarkable gift for making clinical research feel personal and urgent." },
+      { rating: 5, comment: "The most important talk of the event. Every parent in the room should have been present." },
+      { rating: 5, comment: "Rare to see a talk that is both scientifically rigorous and emotionally resonant. This was both." },
+      { rating: 5, comment: "Left in tears. The courage it took to share that story was not lost on anyone in the room." },
+      { rating: 5, comment: "Changed how I think about my own relationship with my phone. Practical, direct, and deeply honest." },
+      { rating: 5, comment: "A five-star talk in every dimension. I have already sent the recording link to twelve people." },
+      { rating: 4, comment: "Beautiful talk. Some of the statistics felt like they needed more recent sourcing to be fully convincing." },
+      { rating: 4, comment: "Incredibly moving. The stage lighting and pacing were perfect. Minor: the call to action could be clearer." },
+      { rating: 4, comment: "Really strong. The personal story was handled with dignity. Would have liked more on therapist-facing tools." },
+      { rating: 4, comment: "Excellent substance. The speaker occasionally rushed through the most interesting parts." },
+      { rating: 4, comment: "Very good. The technology recommendations were practical. A bit more depth on the research behind them would be ideal." },
+      { rating: 4, comment: "Great session. One or two transitions felt abrupt but the overall arc was strong." },
+      { rating: 4, comment: "Strong talk. The vulnerability was authentic. A few slides were text-heavy." },
+      { rating: 4, comment: "Really well delivered. The closing was slightly anticlimactic given how powerful the middle section was." },
+      { rating: 3, comment: "Good talk but covered well-trodden ground. Not much that was genuinely new for those following this area." },
+      { rating: 3, comment: "Decent. The personal story was compelling but the systemic analysis felt thin." },
+      { rating: 3, comment: "Fine presentation. The connection between digital habits and mental health needed more specific evidence." },
+      { rating: 3, comment: "Some strong moments but also some generalisations that did not hold up on reflection." },
+      { rating: 2, comment: "The talk oversimplified complex mental health issues. Some of the recommendations felt irresponsible without more caveats." },
+    ],
+  };
+
+  // Create sessions and feedback
+  let totalFeedbackCount = 0;
+  let totalRatingSum = 0;
+  let totalOneStarCount = 0;
+
+  for (const session of sessions) {
+    const feedback = feedbackBySessions[session.id];
+    const ratingSum = feedback.reduce((s, f) => s + f.rating, 0);
+    const avgRating = Number((ratingSum / feedback.length).toFixed(2));
+    const sessionDate = session.date;
+
     await db.collection("sessions").doc(session.id).set(
       {
         title: session.title,
         managerId: session.managerId,
         managerEmail: session.managerEmail,
         managerName: session.managerName,
-        startedAt: admin.firestore.Timestamp.fromDate(now),
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        isActive: true,
-        avgRating: session.avgRating,
-        totalFeedback: session.totalFeedback,
-        ratingSum: session.ratingSum,
+        accessCode: session.accessCode,
+        startedAt: admin.firestore.Timestamp.fromDate(sessionDate),
+        createdAt: admin.firestore.Timestamp.fromDate(sessionDate),
+        isActive: false,
+        avgRating,
+        totalFeedback: feedback.length,
+        ratingSum,
         seeded: true,
       },
       { merge: true },
     );
 
-    for (let i = 0; i < session.totalFeedback; i += 1) {
-      const ratingPattern = [5, 4, 4, 3, 2, 1];
-      const rating = ratingPattern[i % ratingPattern.length];
-      await db.collection("sessions").doc(session.id).collection("feedback").doc(`${session.id}-seed-${i + 1}`).set(
+    for (let i = 0; i < feedback.length; i++) {
+      const { rating, comment } = feedback[i];
+      const fUserId = i % 2 === 0 ? attendee1Uid : attendee2Uid;
+
+      await db
+        .collection("sessions")
+        .doc(session.id)
+        .collection("feedback")
+        .doc(`${session.id}-seed-${i + 1}`)
+        .set(
+          {
+            sessionId: session.id,
+            sessionTitle: session.title,
+            managerId: session.managerId,
+            userId: fUserId,
+            rating,
+            comment,
+            createdAt: feedbackTs(sessionDate, 90 + i * 5),
+            skipAggregation: true,
+            seeded: true,
+          },
+          { merge: true },
+        );
+
+      // Mirror to top-level feedback collection
+      await db.collection("feedback").doc(`${session.id}-seed-${i + 1}`).set(
         {
           sessionId: session.id,
           sessionTitle: session.title,
           managerId: session.managerId,
-          userId: userMap.get("attendee1@pulse.local") ?? null,
+          userId: fUserId,
           rating,
-          comment: `Seed comment ${i + 1} for ${session.title}`,
-          createdAt: admin.firestore.Timestamp.fromDate(new Date(now.getTime() - (i + 1) * 60 * 60 * 1000)),
-          skipAggregation: true,
+          comment,
+          createdAt: feedbackTs(sessionDate, 90 + i * 5),
           seeded: true,
         },
         { merge: true },
       );
     }
+
+    totalFeedbackCount += feedback.length;
+    totalRatingSum += ratingSum;
+    totalOneStarCount += feedback.filter((f) => f.rating === 1).length;
+
+    // Manager daily stats for the session date
+    const dateStr = sessionDate.toISOString().slice(0, 10);
+    await db
+      .collection("managerDailyStats")
+      .doc(`${session.managerId}_${dateStr}`)
+      .set(
+        {
+          managerId: session.managerId,
+          date: dateStr,
+          sessionsHosted: 1,
+          feedbackReceived: feedback.length,
+          ratingSum,
+          averageRating: avgRating,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          seeded: true,
+        },
+        { merge: true },
+      );
+  }
+
+  // Fill remaining 361 days of daily stats for the graph (random data for historical context)
+  for (const [managerUid] of [[manager1Uid], [manager2Uid]]) {
+    for (let daysBack = 5; daysBack <= 365; daysBack++) {
+      const d = new Date(now);
+      d.setUTCDate(d.getUTCDate() - daysBack);
+      const dateStr = d.toISOString().slice(0, 10);
+      const avg = Number((2.8 + Math.random() * 1.8).toFixed(2));
+      const count = 10 + Math.floor(Math.random() * 20);
+      await db
+        .collection("managerDailyStats")
+        .doc(`${managerUid}_${dateStr}`)
+        .set(
+          {
+            managerId: managerUid,
+            date: dateStr,
+            sessionsHosted: 2,
+            feedbackReceived: count,
+            ratingSum: Number((avg * count).toFixed(0)),
+            averageRating: avg,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            seeded: true,
+          },
+          { merge: true },
+        );
+    }
   }
 
   await db.collection("eventStats").doc("global").set(
     {
-      feedbackCount: demoSessions.reduce((acc, s) => acc + s.totalFeedback, 0),
-      ratingSum: demoSessions.reduce((acc, s) => acc + s.ratingSum, 0),
-      avgRating: 3.67,
-      oneStarCount: 4,
+      feedbackCount: totalFeedbackCount,
+      ratingSum: totalRatingSum,
+      avgRating: Number((totalRatingSum / totalFeedbackCount).toFixed(2)),
+      oneStarCount: totalOneStarCount,
       lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
       seeded: true,
     },
     { merge: true },
   );
 
-  const dailyDates = Array.from({ length: 30 }, (_, idx) => {
-    const d = new Date(now);
-    d.setUTCDate(d.getUTCDate() - idx);
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
-  });
-
-  for (const managerUid of [manager1Uid, manager2Uid]) {
-    for (const date of dailyDates) {
-      const avg = Number((2.5 + Math.random() * 2.2).toFixed(2));
-      await db.collection("managerDailyStats").doc(`${managerUid}_${date}`).set(
-        {
-          managerId: managerUid,
-          date,
-          sessionsHosted: 4,
-          feedbackReceived: 10,
-          averageRating: avg,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          seeded: true,
-        },
-        { merge: true },
-      );
-    }
-  }
-
-  await db.collection("sessionSummaries").doc("seed-summary").set(
-    {
-      date: now.toISOString().slice(0, 10),
-      summaryText: "Seeded summary: sessions performed strongly overall with a few at-risk topics requiring follow-up.",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      seeded: true,
-    },
-    { merge: true },
-  );
-
-  await db.collection("tasks").doc("seed-task-1").set({ title: "Check at-risk sessions before next break", seeded: true }, { merge: true });
-  await db.collection("tasks").doc("seed-task-2").set({ title: "Review one-star comments with managers", seeded: true }, { merge: true });
-
   return {
     ok: true,
-    message: "Dummy data seeded successfully.",
+    message: "Demo data seeded: 4 sessions, 25 feedback each, 365-day history.",
     credentials: {
       password: DEMO_PASSWORD,
       users: demoUsers.map((u) => ({ email: u.email, role: u.role })),

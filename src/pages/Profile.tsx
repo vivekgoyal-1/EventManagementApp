@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom"
 
 import { auth, db } from "../services/firebase"
 import { useAuth } from "../hooks/useAuth"
+import { getInitials } from "../lib/utils"
 
 export default function ProfilePage() {
   const { user } = useAuth()
@@ -43,12 +44,7 @@ export default function ProfilePage() {
     }
   }
 
-  const initials = (user?.displayName || user?.email || "?")
-    .split(" ")
-    .slice(0, 2)
-    .map((w: string) => w[0])
-    .join("")
-    .toUpperCase()
+  const initials = getInitials(user)
 
   return (
     <div className="max-w-lg">

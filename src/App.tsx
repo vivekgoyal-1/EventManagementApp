@@ -28,23 +28,13 @@ function AppShell({ children }: { children: ReactNode }) {
 
 function ProtectedRoute({
   user,
-  loading,
   requiredRole,
   children,
 }: {
   user: any
-  loading: boolean
   requiredRole?: string
   children: ReactNode
 }) {
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-32 text-zinc-400 text-sm">
-        Loading…
-      </div>
-    )
-  }
-
   if (!user) return <Navigate to="/" replace />
 
   if (requiredRole && user.role !== requiredRole) {
@@ -93,7 +83,7 @@ export default function App() {
         <Route
           path="/home"
           element={
-            <ProtectedRoute user={user} loading={loading} requiredRole="attendee">
+            <ProtectedRoute user={user} requiredRole="attendee">
               <HomePage />
             </ProtectedRoute>
           }
@@ -102,7 +92,7 @@ export default function App() {
         <Route
           path="/manager"
           element={
-            <ProtectedRoute user={user} loading={loading} requiredRole="stageManager">
+            <ProtectedRoute user={user} requiredRole="stageManager">
               <ManagerDashboard />
             </ProtectedRoute>
           }
@@ -111,7 +101,7 @@ export default function App() {
         <Route
           path="/director"
           element={
-            <ProtectedRoute user={user} loading={loading} requiredRole="eventDirector">
+            <ProtectedRoute user={user} requiredRole="eventDirector">
               <EventDirectorDashboard />
             </ProtectedRoute>
           }
@@ -120,7 +110,7 @@ export default function App() {
         <Route
           path="/director/roles"
           element={
-            <ProtectedRoute user={user} loading={loading} requiredRole="eventDirector">
+            <ProtectedRoute user={user} requiredRole="eventDirector">
               <RoleManagementPage />
             </ProtectedRoute>
           }
@@ -129,7 +119,7 @@ export default function App() {
         <Route
           path="/director/sessions"
           element={
-            <ProtectedRoute user={user} loading={loading} requiredRole="eventDirector">
+            <ProtectedRoute user={user} requiredRole="eventDirector">
               <SessionManagementPage />
             </ProtectedRoute>
           }
@@ -138,7 +128,7 @@ export default function App() {
         <Route
           path="/session/:sessionId"
           element={
-            <ProtectedRoute user={user} loading={loading}>
+            <ProtectedRoute user={user} >
               <SessionDetail />
             </ProtectedRoute>
           }
@@ -147,7 +137,7 @@ export default function App() {
         <Route
           path="/profile"
           element={
-            <ProtectedRoute user={user} loading={loading}>
+            <ProtectedRoute user={user} >
               <ProfilePage />
             </ProtectedRoute>
           }

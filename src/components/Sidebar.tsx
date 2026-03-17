@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom"
 import { useAuth } from "../hooks/useAuth"
+import { getInitials } from "../lib/utils"
 import { SignOutButton } from "./SignOutButton"
 
 function NavIcon({ path }: { path: string }) {
@@ -34,15 +35,10 @@ export default function Sidebar() {
         : "text-zinc-400 hover:text-white hover:bg-white/5"
     }`
 
-  const initials = (user?.displayName || user?.email || "?")
-    .split(" ")
-    .slice(0, 2)
-    .map((w: string) => w[0])
-    .join("")
-    .toUpperCase()
+  const initials = getInitials(user)
 
   return (
-    <aside className="w-60 bg-zinc-950 flex flex-col min-h-screen shrink-0 hidden md:flex">
+    <aside className="w-60 bg-zinc-950 flex flex-col h-screen sticky top-0 shrink-0 hidden md:flex">
 
       {/* Logo */}
       <div className="px-5 py-5 border-b border-white/5">
@@ -63,7 +59,7 @@ export default function Sidebar() {
       )}
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 py-2 space-y-0.5 text-zinc-400">
+      <nav className="flex-1 px-3 py-2 space-y-0.5 text-zinc-400 overflow-y-auto">
 
         {user?.role === "attendee" && (
           <NavLink to="/home" className={navItem}>

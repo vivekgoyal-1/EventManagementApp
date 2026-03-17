@@ -14,6 +14,7 @@ import { db } from "../services/firebase"
 import { StatCard } from "../components/StatCard"
 import { ManagerDailyStats, Session } from "../types"
 import { useAuth } from "../hooks/useAuth"
+import { toDate } from "../lib/utils"
 
 type CriticalFeedback = {
   id: string
@@ -54,16 +55,13 @@ function SessionCard({
   const isGood = avg >= 4
 
   const sessionStarted = (() => {
-    const s = session.startedAt as any
-    if (!s) return false
-    const d = typeof s.toDate === "function" ? s.toDate() : new Date(s)
-    return d <= new Date()
+    const d = toDate(session.startedAt)
+    return d ? d <= new Date() : false
   })()
 
   const canOpenFeedback = session.isActive || sessionStarted
 
   async function handleToggleActive() {
-    if (!session.isActive && !sessionStarted) return
     setToggling(true)
     try {
       await updateDoc(doc(db, "sessions", session.id), { isActive: !session.isActive })
@@ -388,11 +386,11 @@ export default function ManagerDashboard() {
     return () => unsub()
   }, [user])
 
-  // Critical feedback listener (≤2 stars).
-  // Depends on sessionIdKey (stable string) instead of the sessions array to
-  // avoid re-subscribing every time onSnapshot returns a new array reference.
+  // Single listener per session — computes live stats AND critical feedback together,
+  // halving the number of open Firestore connections vs two separate effects.
   useEffect(() => {
     setCriticalFeedback([])
+    setLiveStats({})
     hasLoadedCriticalRef.current = false
     criticalIdsRef.current = new Set()
 
@@ -405,19 +403,27 @@ export default function ManagerDashboard() {
 
     const unsubs = current.slice(0, 10).map((session) =>
       onSnapshot(
-        query(
-          collection(db, "sessions", session.id, "feedback"),
-          where("rating", "<=", 2),
-          limit(10),
-        ),
+        collection(db, "sessions", session.id, "feedback"),
         (snap) => {
-          const items = snap.docs.map((d) => ({
-            id: d.id,
-            sessionId: session.id,
-            sessionTitle: session.title ?? "Untitled",
-            comment: String(d.data().comment ?? ""),
-            rating: Number(d.data().rating ?? 0),
+          // Live stats
+          const count = snap.size
+          const ratingSum = snap.docs.reduce((s, d) => s + Number(d.data().rating ?? 0), 0)
+          setLiveStats((prev) => ({
+            ...prev,
+            [session.id]: { count, ratingSum, avg: count > 0 ? ratingSum / count : 0 },
           }))
+
+          // Critical feedback (≤2 stars)
+          const items = snap.docs
+            .filter((d) => Number(d.data().rating ?? 0) <= 2)
+            .slice(0, 10)
+            .map((d) => ({
+              id: d.id,
+              sessionId: session.id,
+              sessionTitle: session.title ?? "Untitled",
+              comment: String(d.data().comment ?? ""),
+              rating: Number(d.data().rating ?? 0),
+            }))
 
           const newItem = items.find((i) => !criticalIdsRef.current.has(i.id))
           items.forEach((i) => criticalIdsRef.current.add(i.id))
@@ -435,7 +441,7 @@ export default function ManagerDashboard() {
         },
         (err: any) => {
           if (err?.code === "permission-denied") return
-          setError(String(err?.message ?? "Unable to fetch critical feedback"))
+          setError(String(err?.message ?? "Unable to fetch feedback"))
         },
       )
     )
@@ -448,39 +454,25 @@ export default function ManagerDashboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, sessionIdKey])
 
-  // Live counts and averages per session.
-  // Same stable-key pattern to prevent listener thrashing.
-  useEffect(() => {
-    setLiveStats({})
-    const current = sessionsRef.current
-    if (current.length === 0) return
-    const unsubs = current.map((session) =>
-      onSnapshot(
-        collection(db, "sessions", session.id, "feedback"),
-        (snap) => {
-          const count = snap.size
-          const ratingSum = snap.docs.reduce((s, d) => s + Number(d.data().rating ?? 0), 0)
-          setLiveStats((prev) => ({
-            ...prev,
-            [session.id]: { count, ratingSum, avg: count > 0 ? ratingSum / count : 0 },
-          }))
-        },
-        (err: any) => {
-          if (err?.code === "permission-denied") return
-          setError(String(err?.message ?? "Unable to fetch live feedback"))
-        },
-      )
-    )
-    return () => unsubs.forEach((u) => u())
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionIdKey])
-
   function copyLink(session: Session) {
     const url = `${window.location.origin}/home?session=${session.id}&code=${session.accessCode ?? ""}`
-    navigator.clipboard.writeText(url).then(() => {
-      setCopiedId(session.id)
-      setTimeout(() => setCopiedId(null), 2000)
-    })
+    const done = () => { setCopiedId(session.id); setTimeout(() => setCopiedId(null), 2000) }
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(url).then(done).catch(() => fallbackCopy(url, done))
+    } else {
+      fallbackCopy(url, done)
+    }
+  }
+
+  function fallbackCopy(text: string, done: () => void) {
+    const ta = document.createElement("textarea")
+    ta.value = text
+    ta.style.position = "fixed"
+    ta.style.opacity = "0"
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    try { document.execCommand("copy"); done() } finally { document.body.removeChild(ta) }
   }
 
   const liveResponseCount = useMemo(
@@ -499,9 +491,8 @@ export default function ManagerDashboard() {
 
     const byDay = new Map<string, { ratingSum: number; count: number }>()
     sessions.forEach((session) => {
-      const raw = (session as any).startedAt
-      if (!raw) return
-      const d = raw?.toDate ? raw.toDate() : new Date(raw)
+      const d = toDate((session as any).startedAt)
+      if (!d) return
       const dateStr = d.toISOString().slice(0, 10)
       const count = session.totalFeedback ?? 0
       const ratingSum = session.ratingSum ?? 0

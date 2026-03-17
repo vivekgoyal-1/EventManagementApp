@@ -3,9 +3,10 @@ import { useSearchParams } from "react-router-dom"
 import {
   collection,
   doc,
-  getDoc,
   onSnapshot,
+  query,
   serverTimestamp,
+  where,
   writeBatch,
 } from "firebase/firestore"
 
@@ -67,12 +68,14 @@ export default function FeedbackForm({ sessionId: propSessionId, onSubmitted }: 
   const [success, setSuccess] = useState(false)
 
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, "sessions"), (snap) => {
-      const list = (snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Session[])
-        .filter((s) => s.isActive === true)
-      setSessions(list)
-      if (!selectedSessionId && list.length > 0) setSelectedSessionId(list[0].id)
-    })
+    const unsub = onSnapshot(
+      query(collection(db, "sessions"), where("isActive", "==", true)),
+      (snap) => {
+        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Session[]
+        setSessions(list)
+        if (!selectedSessionId && list.length > 0) setSelectedSessionId(list[0].id)
+      },
+    )
     return () => unsub()
   }, [])
 
@@ -96,10 +99,8 @@ export default function FeedbackForm({ sessionId: propSessionId, onSubmitted }: 
     setLoading(true)
 
     try {
-      const sessionSnap = await getDoc(doc(db, "sessions", selectedSessionId))
-      if (!sessionSnap.exists()) throw new Error("Session not found")
-      const sessionData = sessionSnap.data() as Session
-      if (!sessionData.isActive) throw new Error("Session is not active")
+      const sessionData = sessions.find((s) => s.id === selectedSessionId)
+      if (!sessionData) throw new Error("Session is not active")
 
       const batch = writeBatch(db)
 

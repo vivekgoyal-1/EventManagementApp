@@ -408,9 +408,15 @@ export default function EventDirectorDashboard() {
   }, [allSessionsWithLive])
 
   const liveStats = useMemo(() => {
-    const feedbackCount = allSessionsWithLive.reduce((s, sess) => s + (sess.totalFeedback ?? 0), 0)
-    const ratingSum = allSessionsWithLive.reduce((s, sess) => s + (sess.ratingSum ?? 0), 0)
-    const oneStarCount = Object.values(liveFeedbackStats).reduce((s, st) => s + st.oneStarCount, 0)
+    const { feedbackCount, ratingSum, oneStarCount } = allSessionsWithLive.reduce(
+      (acc, sess) => {
+        acc.feedbackCount += sess.totalFeedback ?? 0
+        acc.ratingSum += sess.ratingSum ?? 0
+        acc.oneStarCount += liveFeedbackStats[sess.id]?.oneStarCount ?? 0
+        return acc
+      },
+      { feedbackCount: 0, ratingSum: 0, oneStarCount: 0 },
+    )
     return {
       feedbackCount,
       avgRating: feedbackCount > 0 ? ratingSum / feedbackCount : 0,
@@ -469,7 +475,9 @@ export default function EventDirectorDashboard() {
     const a = document.createElement("a")
     a.href = url
     a.download = `tedx-feedback-${reportData.date}.txt`
+    document.body.appendChild(a)
     a.click()
+    document.body.removeChild(a)
     URL.revokeObjectURL(url)
   }
 

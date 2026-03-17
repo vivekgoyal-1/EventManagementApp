@@ -5,12 +5,12 @@ import {
   doc,
   getDoc,
   onSnapshot,
-  type Timestamp,
 } from "firebase/firestore"
 
 import { db } from "../services/firebase"
 import type { Feedback, Session } from "../types"
 import { useAuth } from "../hooks/useAuth"
+import { toDate } from "../lib/utils"
 
 type RatingFilter = "all" | 5 | 4 | 3 | 2 | 1
 
@@ -50,10 +50,7 @@ function SubmissionIntegrity({
   // Build an hourly histogram from submission timestamps
   const { buckets, firstTs, lastTs, windowMinutes, isSuspicious } = useMemo(() => {
     const timestamps: Date[] = feedback
-      .map((f) => {
-        const raw = f.createdAt as unknown as Timestamp
-        return raw?.toDate ? raw.toDate() : null
-      })
+      .map((f) => toDate(f.createdAt))
       .filter((d): d is Date => d !== null)
       .sort((a, b) => a.getTime() - b.getTime())
 
@@ -255,7 +252,7 @@ export default function SessionDetail() {
     () => (ratingFilter === "all" ? feedback : feedback.filter((f) => f.rating === ratingFilter))
       .map((f) => ({
         ...f,
-        ts: (f.createdAt as unknown as Timestamp)?.toDate?.() ?? null,
+        ts: toDate(f.createdAt),
       }))
       .sort((a, b) => (b.ts?.getTime() ?? 0) - (a.ts?.getTime() ?? 0)),
     [feedback, ratingFilter],
@@ -269,9 +266,7 @@ export default function SessionDetail() {
 
   const backTo = user.role === "eventDirector" ? "/director" : "/manager"
 
-  const startedAt = session
-    ? (session.startedAt as unknown as Timestamp)?.toDate?.()
-    : null
+  const startedAt = session ? toDate(session.startedAt) : null
 
   const count = feedback.length
   const avg = count > 0 ? feedback.reduce((sum, f) => sum + f.rating, 0) / count : 0
@@ -351,10 +346,10 @@ export default function SessionDetail() {
             { label: "Average Rating", value: count > 0 ? avg.toFixed(2) + " ★" : "—" },
             { label: "1-Star Responses", value: ratingCounts.find((r) => r.star === 1)?.count ?? 0 },
             { label: "Unique Attendees", value: uniqueSubmitters !== null ? uniqueSubmitters : "—" },
-          ].map((c) => (
-            <div key={c.label} className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-5">
-              <p className="text-xs font-semibold uppercase tracking-widest text-zinc-400">{c.label}</p>
-              <p className="mt-2 text-3xl font-black text-zinc-900 tabular-nums">{c.value}</p>
+          ].map((stat) => (
+            <div key={stat.label} className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-5">
+              <p className="text-xs font-semibold uppercase tracking-widest text-zinc-400">{stat.label}</p>
+              <p className="mt-2 text-3xl font-black text-zinc-900 tabular-nums">{stat.value}</p>
             </div>
           ))}
         </div>

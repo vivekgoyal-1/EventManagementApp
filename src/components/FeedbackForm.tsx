@@ -68,7 +68,8 @@ export default function FeedbackForm({ sessionId: propSessionId, onSubmitted }: 
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "sessions"), (snap) => {
-      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Session[]
+      const list = (snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Session[])
+        .filter((s) => s.isActive === true)
       setSessions(list)
       if (!selectedSessionId && list.length > 0) setSelectedSessionId(list[0].id)
     })
@@ -98,6 +99,7 @@ export default function FeedbackForm({ sessionId: propSessionId, onSubmitted }: 
       const sessionSnap = await getDoc(doc(db, "sessions", selectedSessionId))
       if (!sessionSnap.exists()) throw new Error("Session not found")
       const sessionData = sessionSnap.data() as Session
+      if (!sessionData.isActive) throw new Error("Session is not active")
 
       const batch = writeBatch(db)
 
@@ -125,7 +127,9 @@ export default function FeedbackForm({ sessionId: propSessionId, onSubmitted }: 
       onSubmitted?.()
 
     } catch (err: any) {
-      if (err?.code === "permission-denied") {
+      if (err?.message === "Session is not active") {
+        setError("This session is not currently active. Feedback can only be submitted during an active session.")
+      } else if (err?.code === "permission-denied") {
         setError("Submission failed. Invalid access code, or you have already submitted for this session.")
       } else {
         setError("Could not submit feedback. Please try again.")
@@ -149,7 +153,7 @@ export default function FeedbackForm({ sessionId: propSessionId, onSubmitted }: 
           className="w-full rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm text-zinc-900 focus:border-ted focus:outline-none focus:ring-2 focus:ring-ted/10 transition"
           required
         >
-          {sessions.length === 0 && <option value="">No sessions available</option>}
+          {sessions.length === 0 && <option value="">No active sessions available</option>}
           {sessions.map((s) => (
             <option key={s.id} value={s.id}>{s.title ?? s.id}</option>
           ))}

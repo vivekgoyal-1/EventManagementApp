@@ -115,6 +115,7 @@ service cloud.firestore {
         allow create: if isSignedIn() &&
           isAttendee() &&
           request.resource.data.userId == request.auth.uid &&
+          get(/databases/$(database)/documents/sessions/$(sessionId)).data.isActive == true &&
           request.resource.data.accessCode ==
             get(/databases/$(database)/documents/sessions/$(sessionId)).data.accessCode &&
           !exists(/databases/$(database)/documents/sessions/$(sessionId)/submittedBy/$(request.auth.uid));
@@ -249,8 +250,12 @@ service cloud.firestore {
       // Users can read their own profile to determine role.
       allow read: if isSignedIn() && userId == request.auth.uid;
 
-      // Profiles are managed only by backend logic.
-      allow write: if false;
+      // Users can update only their own display name.
+      allow update: if isSignedIn() && userId == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName']);
+
+      // Create and delete are managed only by backend logic.
+      allow create, delete: if false;
     }
 
     /*

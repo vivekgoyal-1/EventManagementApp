@@ -102,7 +102,7 @@ export default function Sidebar() {
 
       {/* User footer */}
       <div className="border-t border-white/5 px-4 py-4 space-y-3">
-        <div className="flex items-center gap-3">
+        <NavLink to="/profile" className="flex items-center gap-3 rounded-lg hover:bg-white/5 transition -mx-1 px-1 py-1">
           <div className="w-8 h-8 rounded-full bg-ted/20 text-ted text-xs font-bold flex items-center justify-center shrink-0">
             {initials}
           </div>
@@ -114,7 +114,7 @@ export default function Sidebar() {
               {user?.email}
             </p>
           </div>
-        </div>
+        </NavLink>
         <SignOutButton />
       </div>
 

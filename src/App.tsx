@@ -6,6 +6,7 @@ import EventDirectorDashboard from "./pages/EventDirectorDashboard"
 import HomePage from "./pages/Home"
 import ManagerDashboard from "./pages/ManagerDashboard"
 import AuthPage from "./pages/Auth"
+import ProfilePage from "./pages/Profile"
 import RoleManagementPage from "./pages/RoleManagement"
 import SessionManagementPage from "./pages/SessionManagement"
 import SessionDetail from "./pages/SessionDetail"
@@ -139,6 +140,15 @@ export default function App() {
           element={
             <ProtectedRoute user={user} loading={loading}>
               <SessionDetail />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/profile"
+          element={
+            <ProtectedRoute user={user} loading={loading}>
+              <ProfilePage />
             </ProtectedRoute>
           }
         />

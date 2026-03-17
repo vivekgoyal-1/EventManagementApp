@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import {
   collection,
+  doc,
   limit,
   onSnapshot,
   query,
+  updateDoc,
   where,
 } from "firebase/firestore"
 
@@ -45,10 +47,30 @@ function SessionCard({
   copied: boolean
 }) {
   const [showLink, setShowLink] = useState(false)
+  const [toggling, setToggling] = useState(false)
   const avg = live ? live.avg : (session.avgRating ?? 0)
   const count = live ? live.count : (session.totalFeedback ?? 0)
   const isLow = avg > 0 && avg < 3
   const isGood = avg >= 4
+
+  const sessionStarted = (() => {
+    const s = session.startedAt as any
+    if (!s) return false
+    const d = typeof s.toDate === "function" ? s.toDate() : new Date(s)
+    return d <= new Date()
+  })()
+
+  const canOpenFeedback = session.isActive || sessionStarted
+
+  async function handleToggleActive() {
+    if (!session.isActive && !sessionStarted) return
+    setToggling(true)
+    try {
+      await updateDoc(doc(db, "sessions", session.id), { isActive: !session.isActive })
+    } finally {
+      setToggling(false)
+    }
+  }
 
   const shareUrl = `${window.location.origin}/home?session=${session.id}&code=${session.accessCode ?? ""}`
 
@@ -127,13 +149,27 @@ function SessionCard({
         </div>
       )}
 
-      {/* View details button */}
-      <Link
-        to={`/session/${session.id}`}
-        className="flex items-center justify-center gap-1.5 rounded-xl bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-ted transition-colors"
-      >
-        View Details →
-      </Link>
+      {/* Active toggle + View details */}
+      <div className="flex gap-2">
+        <button
+          onClick={handleToggleActive}
+          disabled={toggling || !canOpenFeedback}
+          title={!canOpenFeedback ? "Session has not started yet" : undefined}
+          className={`flex-1 rounded-xl px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+            session.isActive
+              ? "bg-green-100 text-green-700 hover:bg-red-100 hover:text-red-700"
+              : "bg-zinc-100 text-zinc-500 hover:bg-green-100 hover:text-green-700"
+          }`}
+        >
+          {session.isActive ? "● Feedback Open" : "○ Open Feedback"}
+        </button>
+        <Link
+          to={`/session/${session.id}`}
+          className="flex items-center justify-center gap-1.5 rounded-xl bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-ted transition-colors"
+        >
+          Details →
+        </Link>
+      </div>
     </div>
   )
 }

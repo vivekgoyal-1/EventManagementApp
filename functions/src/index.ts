@@ -154,26 +154,27 @@ export const onFeedbackCreated = onDocumentCreated(
 
     await db.runTransaction(async (tx) => {
 
+      // All reads must come before any writes (Admin SDK requirement)
       const sessionDoc = await tx.get(sessionRef);
       const statsDoc = await tx.get(statsRef);
+      const dailyDoc = dailyRef ? await tx.get(dailyRef) : null;
 
       const prevRatingSum = Number(sessionDoc.data()?.ratingSum ?? 0);
       const prevTotal = Number(sessionDoc.data()?.totalFeedback ?? 0);
-
       const nextSum = prevRatingSum + rating;
       const nextTotal = prevTotal + 1;
 
+      const prevGlobalSum = Number(statsDoc.data()?.ratingSum ?? 0);
+      const prevGlobalCount = Number(statsDoc.data()?.feedbackCount ?? 0);
+      const newCount = prevGlobalCount + 1;
+      const newSum = prevGlobalSum + rating;
+
+      // Writes
       tx.update(sessionRef, {
         ratingSum: nextSum,
         totalFeedback: nextTotal,
         avgRating: Number((nextSum / nextTotal).toFixed(2)),
       });
-
-      const prevGlobalSum = Number(statsDoc.data()?.ratingSum ?? 0);
-      const prevGlobalCount = Number(statsDoc.data()?.feedbackCount ?? 0);
-
-      const newCount = prevGlobalCount + 1;
-      const newSum = prevGlobalSum + rating;
 
       tx.set(
         statsRef,
@@ -187,8 +188,7 @@ export const onFeedbackCreated = onDocumentCreated(
         { merge: true },
       );
 
-      if (dailyRef) {
-        const dailyDoc = await tx.get(dailyRef);
+      if (dailyRef && dailyDoc) {
         const prevDailySum = Number(dailyDoc.data()?.ratingSum ?? 0);
         const prevDailyCount = Number(dailyDoc.data()?.feedbackReceived ?? 0);
         const newDailyCount = prevDailyCount + 1;
@@ -536,7 +536,16 @@ export const deleteSessionCascade = onCall({ region: REGION }, async (request) =
   if (deletedFeedbackCount > 0) {
     const statsRef = db.collection("eventStats").doc("global");
     await db.runTransaction(async (tx) => {
+      // All reads first
       const statsDoc = await tx.get(statsRef);
+
+      const dailyRefs = Array.from(dailyDeltas.values()).map((delta) => ({
+        delta,
+        ref: db.collection("managerDailyStats").doc(`${delta.managerId}_${delta.date}`),
+      }));
+      const dailyDocs = await Promise.all(dailyRefs.map(({ ref }) => tx.get(ref)));
+
+      // Writes
       const prevGlobalCount = Number(statsDoc.data()?.feedbackCount ?? 0);
       const prevGlobalSum = Number(statsDoc.data()?.ratingSum ?? 0);
       const prevOneStar = Number(statsDoc.data()?.oneStarCount ?? 0);
@@ -557,14 +566,12 @@ export const deleteSessionCascade = onCall({ region: REGION }, async (request) =
         { merge: true },
       );
 
-      for (const delta of dailyDeltas.values()) {
-        const dailyRef = db.collection("managerDailyStats").doc(`${delta.managerId}_${delta.date}`);
-        const dailyDoc = await tx.get(dailyRef);
-        if (!dailyDoc.exists) continue;
+      dailyDocs.forEach((dailyDoc, i) => {
+        if (!dailyDoc.exists) return;
+        const { delta, ref: dailyRef } = dailyRefs[i];
 
         const prevCount = Number(dailyDoc.data()?.feedbackReceived ?? 0);
         const prevSum = Number(dailyDoc.data()?.ratingSum ?? 0);
-
         const nextCountDaily = Math.max(0, prevCount - delta.count);
         const nextSumDaily = Math.max(0, prevSum - delta.ratingSum);
 
@@ -582,7 +589,7 @@ export const deleteSessionCascade = onCall({ region: REGION }, async (request) =
             { merge: true },
           );
         }
-      }
+      });
     });
   }
 

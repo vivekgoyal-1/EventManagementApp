@@ -83,8 +83,13 @@ export default function SessionManagementPage() {
       const fn = httpsCallable<{ sessionId: string }, { ok: boolean }>(functions, "deleteSessionCascade")
       await fn({ sessionId })
       setSuccess("Session removed")
-    } catch {
-      setError("Unable to remove session")
+    } catch (err: any) {
+      const message = String(err?.message ?? "")
+      if (message) {
+        setError(`Unable to remove session: ${message}`)
+      } else {
+        setError("Unable to remove session")
+      }
     } finally {
       setDeletingId(null)
     }

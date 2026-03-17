@@ -468,6 +468,19 @@ export const deleteSessionCascade = onCall({ region: REGION }, async (request) =
     throw new HttpsError("not-found", "Session not found.");
   }
 
+  const sessionData = sessionSnap.data() ?? {};
+  const fallbackManagerId = String(sessionData.managerId ?? "");
+  const fallbackSessionDate = (() => {
+    const startedAt = sessionData.startedAt as admin.firestore.Timestamp | undefined;
+    if (!startedAt?.toDate) return null;
+    return startedAt.toDate().toISOString().slice(0, 10);
+  })();
+
+  let deletedFeedbackCount = 0;
+  let deletedRatingSum = 0;
+  let deletedOneStarCount = 0;
+  const dailyDeltas = new Map<string, { managerId: string; date: string; count: number; ratingSum: number }>();
+
   // Delete feedback docs in batches to avoid recursive orphan data.
   while (true) {
     const feedbackSnap = await sessionRef.collection("feedback").limit(250).get();
@@ -477,13 +490,102 @@ export const deleteSessionCascade = onCall({ region: REGION }, async (request) =
 
     const batch = db.batch();
     feedbackSnap.docs.forEach((docSnap) => {
+      const row = docSnap.data() ?? {};
+      const rating = Number(row.rating ?? 0);
+      const managerId = String(row.managerId ?? fallbackManagerId);
+      const createdAt = row.createdAt as admin.firestore.Timestamp | undefined;
+      const date = createdAt?.toDate
+        ? createdAt.toDate().toISOString().slice(0, 10)
+        : fallbackSessionDate;
+
+      deletedFeedbackCount += 1;
+      deletedRatingSum += rating;
+      if (rating === 1) deletedOneStarCount += 1;
+
+      if (managerId && date) {
+        const key = `${managerId}_${date}`;
+        const prev = dailyDeltas.get(key) ?? { managerId, date, count: 0, ratingSum: 0 };
+        prev.count += 1;
+        prev.ratingSum += rating;
+        dailyDeltas.set(key, prev);
+      }
+
       batch.delete(docSnap.ref);
       batch.delete(db.collection("feedback").doc(docSnap.id));
     });
     await batch.commit();
   }
 
+  // Cleanup one-submission markers for this session.
+  while (true) {
+    const submittedSnap = await sessionRef.collection("submittedBy").limit(250).get();
+    if (submittedSnap.empty) {
+      break;
+    }
+
+    const batch = db.batch();
+    submittedSnap.docs.forEach((docSnap) => {
+      batch.delete(docSnap.ref);
+    });
+    await batch.commit();
+  }
+
   await sessionRef.delete();
+
+  // Keep aggregate dashboards consistent after deletion.
+  if (deletedFeedbackCount > 0) {
+    const statsRef = db.collection("eventStats").doc("global");
+    await db.runTransaction(async (tx) => {
+      const statsDoc = await tx.get(statsRef);
+      const prevGlobalCount = Number(statsDoc.data()?.feedbackCount ?? 0);
+      const prevGlobalSum = Number(statsDoc.data()?.ratingSum ?? 0);
+      const prevOneStar = Number(statsDoc.data()?.oneStarCount ?? 0);
+
+      const nextCount = Math.max(0, prevGlobalCount - deletedFeedbackCount);
+      const nextSum = Math.max(0, prevGlobalSum - deletedRatingSum);
+      const nextOneStar = Math.max(0, prevOneStar - deletedOneStarCount);
+
+      tx.set(
+        statsRef,
+        {
+          feedbackCount: nextCount,
+          ratingSum: nextSum,
+          avgRating: nextCount > 0 ? Number((nextSum / nextCount).toFixed(2)) : 0,
+          oneStarCount: nextOneStar,
+          lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+
+      for (const delta of dailyDeltas.values()) {
+        const dailyRef = db.collection("managerDailyStats").doc(`${delta.managerId}_${delta.date}`);
+        const dailyDoc = await tx.get(dailyRef);
+        if (!dailyDoc.exists) continue;
+
+        const prevCount = Number(dailyDoc.data()?.feedbackReceived ?? 0);
+        const prevSum = Number(dailyDoc.data()?.ratingSum ?? 0);
+
+        const nextCountDaily = Math.max(0, prevCount - delta.count);
+        const nextSumDaily = Math.max(0, prevSum - delta.ratingSum);
+
+        if (nextCountDaily === 0) {
+          tx.delete(dailyRef);
+        } else {
+          tx.set(
+            dailyRef,
+            {
+              feedbackReceived: nextCountDaily,
+              ratingSum: nextSumDaily,
+              averageRating: Number((nextSumDaily / nextCountDaily).toFixed(2)),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true },
+          );
+        }
+      }
+    });
+  }
+
   return { ok: true, deletedSessionId: sessionId };
 });
 
@@ -541,6 +643,22 @@ export const seedDummyData = onCall({ region: REGION }, async (request) => {
 
   if (!manager1Uid || !manager2Uid || !attendee1Uid || !attendee2Uid) {
     throw new HttpsError("internal", "Failed to resolve demo users.");
+  }
+
+  // Wipe all existing daily stats for these managers so stale docs
+  // from previous seeds don't bleed into the new graph.
+  for (const managerUid of [manager1Uid, manager2Uid]) {
+    const existing = await db
+      .collection("managerDailyStats")
+      .where("managerId", "==", managerUid)
+      .get();
+    // Delete in chunks of 500 (Firestore batch limit)
+    for (let i = 0; i < existing.docs.length; i += 500) {
+      const chunk = existing.docs.slice(i, i + 500);
+      const delBatch = db.batch();
+      chunk.forEach((d) => delBatch.delete(d.ref));
+      await delBatch.commit();
+    }
   }
 
   const now = new Date();
@@ -803,33 +921,6 @@ export const seedDummyData = onCall({ region: REGION }, async (request) => {
       );
   }
 
-  // Fill remaining 361 days of daily stats for the graph (random data for historical context)
-  for (const [managerUid] of [[manager1Uid], [manager2Uid]]) {
-    for (let daysBack = 5; daysBack <= 365; daysBack++) {
-      const d = new Date(now);
-      d.setUTCDate(d.getUTCDate() - daysBack);
-      const dateStr = d.toISOString().slice(0, 10);
-      const avg = Number((2.8 + Math.random() * 1.8).toFixed(2));
-      const count = 10 + Math.floor(Math.random() * 20);
-      await db
-        .collection("managerDailyStats")
-        .doc(`${managerUid}_${dateStr}`)
-        .set(
-          {
-            managerId: managerUid,
-            date: dateStr,
-            sessionsHosted: 2,
-            feedbackReceived: count,
-            ratingSum: Number((avg * count).toFixed(0)),
-            averageRating: avg,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            seeded: true,
-          },
-          { merge: true },
-        );
-    }
-  }
-
   await db.collection("eventStats").doc("global").set(
     {
       feedbackCount: totalFeedbackCount,
@@ -844,7 +935,7 @@ export const seedDummyData = onCall({ region: REGION }, async (request) => {
 
   return {
     ok: true,
-    message: "Demo data seeded: 4 sessions, 25 feedback each, 365-day history.",
+    message: "Demo data seeded: 4 sessions, 25 feedback each.",
     credentials: {
       password: DEMO_PASSWORD,
       users: demoUsers.map((u) => ({ email: u.email, role: u.role })),

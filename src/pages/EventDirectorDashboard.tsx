@@ -3,11 +3,7 @@ import { Link } from "react-router-dom"
 import {
   collection,
   doc,
-  limit,
   onSnapshot,
-  orderBy,
-  query,
-  where,
 } from "firebase/firestore"
 import { httpsCallable } from "firebase/functions"
 
@@ -124,9 +120,7 @@ function AtRiskList({ sessions }: { sessions: Session[] }) {
 export default function EventDirectorDashboard() {
   const { user, loading: authLoading } = useAuth()
 
-  const [stats, setStats] = useState<EventStatsState | null>(null)
-  const [topSessions, setTopSessions] = useState<Session[]>([])
-  const [atRiskSessions, setAtRiskSessions] = useState<Session[]>([])
+  const [allSessions, setAllSessions] = useState<Session[]>([])
   const [reportDate, setReportDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [reportData, setReportData] = useState<DayReportResult | null>(null)
   const [isGeneratingReport, setIsGeneratingReport] = useState(false)
@@ -135,8 +129,25 @@ export default function EventDirectorDashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [oneStarAlert, setOneStarAlert] = useState<string | null>(null)
+  const [liveFeedbackStats, setLiveFeedbackStats] = useState<Record<string, { count: number; ratingSum: number; oneStarCount: number }>>({})
 
+  // Wait for auth before subscribing so rules always have a valid token
   useEffect(() => {
+    if (!user) { setLoading(false); return }
+
+    setLoading(true)
+
+    // Single subscription for all sessions — derive leaderboard, at-risk, and stats client-side
+    const unsubSessions = onSnapshot(
+      collection(db, "sessions"),
+      (snap) => {
+        setAllSessions(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Session))
+        setLoading(false)
+      },
+      (err) => { setError(err.message || "Unable to load sessions"); setLoading(false) },
+    )
+
+    // Keep eventStats/global for the 1-star real-time alert (CF-updated)
     const statsRef = doc(db, "eventStats", "global")
     let prevOneStarCount = 0
     let hasInit = false
@@ -144,48 +155,89 @@ export default function EventDirectorDashboard() {
     const unsubStats = onSnapshot(statsRef, (snap) => {
       const data = snap.data()
       if (!data) return
-
       const next: EventStatsState = {
         feedbackCount: Number(data.feedbackCount ?? 0),
         avgRating: Number(data.avgRating ?? 0),
         oneStarCount: Number(data.oneStarCount ?? 0),
       }
-
       if (hasInit && next.oneStarCount > prevOneStarCount) {
         const delta = next.oneStarCount - prevOneStarCount
         setOneStarAlert(`${delta} new 1-star rating${delta > 1 ? "s" : ""} just arrived`)
         setTimeout(() => setOneStarAlert(null), 8000)
       }
-
       hasInit = true
       prevOneStarCount = next.oneStarCount
-      setStats(next)
     })
 
-    const unsubTop = onSnapshot(
-      query(collection(db, "sessions"), orderBy("avgRating", "desc"), limit(5)),
-      (snap) => {
-        setTopSessions(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Session))
-        setLoading(false)
-      },
+    return () => { unsubSessions(); unsubStats() }
+  }, [user])
+
+  // Subscribe to each session's feedback subcollection for live counts/averages.
+  // This ensures stats are accurate even when Cloud Functions haven't updated session aggregates yet.
+  useEffect(() => {
+    if (allSessions.length === 0) {
+      setLiveFeedbackStats({})
+      return
+    }
+
+    const unsubs = allSessions.map((session) =>
+      onSnapshot(
+        collection(db, "sessions", session.id, "feedback"),
+        (snap) => {
+          const count = snap.size
+          const ratingSum = snap.docs.reduce((s, d) => s + Number(d.data().rating ?? 0), 0)
+          const oneStarCount = snap.docs.filter((d) => Number(d.data().rating) === 1).length
+          setLiveFeedbackStats((prev) => ({ ...prev, [session.id]: { count, ratingSum, oneStarCount } }))
+        },
+      )
     )
 
-    const unsubRisk = onSnapshot(
-      query(
-        collection(db, "sessions"),
-        where("avgRating", ">", 0),
-        where("avgRating", "<", 3),
-        orderBy("avgRating", "asc"),
-        limit(5),
-      ),
-      (snap) => setAtRiskSessions(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Session)),
-      (err) => setError(err.message || "Unable to load at-risk sessions"),
-    )
+    return () => unsubs.forEach((u) => u())
+  }, [allSessions])
 
-    return () => { unsubStats(); unsubTop(); unsubRisk() }
-  }, [])
+  // Merge live feedback counts into session objects so all derived lists stay in sync
+  const allSessionsWithLive = useMemo(() =>
+    allSessions.map((s) => {
+      const live = liveFeedbackStats[s.id]
+      if (!live) return s
+      const liveAvg = live.count > 0 ? Number((live.ratingSum / live.count).toFixed(2)) : 0
+      return { ...s, totalFeedback: live.count, ratingSum: live.ratingSum, avgRating: liveAvg }
+    }),
+    [allSessions, liveFeedbackStats],
+  )
 
-  const formattedAvg = useMemo(() => (stats ? stats.avgRating.toFixed(2) : "—"), [stats])
+  const topSessions = useMemo(
+    () => [...allSessionsWithLive]
+      .filter((s) => (s.totalFeedback ?? 0) > 0)
+      .sort((a, b) => (b.avgRating ?? 0) - (a.avgRating ?? 0))
+      .slice(0, 5),
+    [allSessionsWithLive],
+  )
+
+  const atRiskSessions = useMemo(
+    () => [...allSessionsWithLive]
+      .filter((s) => (s.avgRating ?? 0) > 0 && (s.avgRating ?? 0) < 3)
+      .sort((a, b) => (a.avgRating ?? 0) - (b.avgRating ?? 0))
+      .slice(0, 5),
+    [allSessionsWithLive],
+  )
+
+  // Global stats derived from live per-session feedback data
+  const liveStats = useMemo((): EventStatsState => {
+    const feedbackCount = allSessionsWithLive.reduce((s, sess) => s + (sess.totalFeedback ?? 0), 0)
+    const ratingSum = allSessionsWithLive.reduce((s, sess) => s + (sess.ratingSum ?? 0), 0)
+    const oneStarCount = Object.values(liveFeedbackStats).reduce((s, st) => s + st.oneStarCount, 0)
+    return {
+      feedbackCount,
+      avgRating: feedbackCount > 0 ? ratingSum / feedbackCount : 0,
+      oneStarCount,
+    }
+  }, [allSessionsWithLive, liveFeedbackStats])
+
+  const formattedAvg = useMemo(
+    () => liveStats.feedbackCount > 0 ? liveStats.avgRating.toFixed(2) : "—",
+    [liveStats],
+  )
 
   async function handleGenerateReport() {
     setError(null)
@@ -298,9 +350,9 @@ export default function EventDirectorDashboard() {
 
       {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-3">
-        <StatCard label="Total Responses" value={stats?.feedbackCount ?? "—"} sub="event-wide" />
+        <StatCard label="Total Responses" value={liveStats.feedbackCount || "—"} sub="event-wide" />
         <StatCard label="Overall Average" value={formattedAvg} sub="weighted across all sessions" />
-        <StatCard label="1-Star Ratings" value={stats?.oneStarCount ?? "—"} highlight={Boolean(stats && stats.oneStarCount > 0)} sub="requires attention" />
+        <StatCard label="1-Star Ratings" value={liveStats.oneStarCount || "—"} highlight={liveStats.oneStarCount > 0} sub="requires attention" />
       </div>
 
       {/* Leaderboard + At Risk side by side */}

@@ -1,13 +1,11 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import {
   collection,
   limit,
   onSnapshot,
-  orderBy,
   query,
   where,
-  type Timestamp,
 } from "firebase/firestore"
 
 import { db } from "../services/firebase"
@@ -20,7 +18,6 @@ type CriticalFeedback = {
   sessionTitle: string
   comment: string
   rating: number
-  createdAt?: Timestamp
 }
 
 function PageHeader({ name }: { name: string }) {
@@ -45,13 +42,16 @@ function StatCard({ label, value, sub }: { label: string; value: any; sub?: stri
   )
 }
 
-function SessionCard({ session, onCopy, copied }: {
+type LiveStats = { count: number; ratingSum: number; avg: number }
+
+function SessionCard({ session, live, onCopy, copied }: {
   session: Session
+  live?: LiveStats
   onCopy: (s: Session) => void
   copied: boolean
 }) {
-  const avg = session.avgRating ?? 0
-  const count = session.totalFeedback ?? 0
+  const avg   = live ? live.avg   : (session.avgRating    ?? 0)
+  const count = live ? live.count : (session.totalFeedback ?? 0)
   const isLow = avg > 0 && avg < 3
   const isGood = avg >= 4
 
@@ -121,71 +121,86 @@ function SessionCard({ session, onCopy, copied }: {
   )
 }
 
+const WINDOW = 30
+
 function DailyAverageGraph({ data }: { data: ManagerDailyStats[] }) {
-  if (data.length === 0) {
+  // Build a lookup of the last WINDOW days regardless of what data exists
+  const days = Array.from({ length: WINDOW }, (_, i) => {
+    const d = new Date()
+    d.setUTCDate(d.getUTCDate() - (WINDOW - 1 - i))
+    return d.toISOString().slice(0, 10)
+  })
+
+  const byDate = Object.fromEntries(data.map((d) => [d.date, d.averageRating]))
+
+  const hasAny = days.some((d) => byDate[d] !== undefined)
+
+  if (!hasAny) {
     return (
-      <div className="flex items-center justify-center h-40 rounded-xl border border-dashed border-zinc-200 text-sm text-zinc-400">
-        No history yet — graph populates as feedback arrives each day
+      <div className="flex items-center justify-center h-36 rounded-xl border border-dashed border-zinc-200 text-sm text-zinc-400">
+        No data in the last {WINDOW} days — submit feedback to see results here
       </div>
     )
   }
 
-  const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date))
+  const barColor = (r: number) =>
+    r >= 4 ? "bg-green-400" : r >= 3 ? "bg-amber-400" : "bg-red-500"
 
-  // Dynamic Y scale: pad 0.3 above and below the data range, clamped to 1–5
-  const ratings = sorted.map((d) => d.averageRating)
-  const dataMin = Math.max(1, Math.min(...ratings) - 0.3)
-  const dataMax = Math.min(5, Math.max(...ratings) + 0.3)
-  const range = dataMax - dataMin || 1
-
-  const toY = (r: number) => 100 - ((r - dataMin) / range) * 90 - 5  // 5–95 band
-
-  // Handle single data point: draw a flat horizontal line
-  const rawPoints = sorted.length === 1
-    ? [[0, toY(sorted[0].averageRating)], [100, toY(sorted[0].averageRating)]]
-    : sorted.map((d, idx) => [
-        (idx / (sorted.length - 1)) * 100,
-        toY(d.averageRating),
-      ])
-
-  const pointStr = rawPoints.map(([x, y]) => `${x},${y}`).join(" ")
-  const areaPoints = `0,100 ${pointStr} 100,100`
-
-  const gridRatings = [Math.ceil(dataMin * 2) / 2, Math.round((dataMin + dataMax) / 2 * 2) / 2, Math.floor(dataMax * 2) / 2]
-    .filter((v, i, a) => a.indexOf(v) === i)
+  // Date labels: first, middle, last
+  const labelIdxs = [0, Math.floor(WINDOW / 2), WINDOW - 1]
 
   return (
-    <div className="relative">
-      {/* Y-axis labels */}
-      <div className="absolute left-0 top-0 bottom-0 flex flex-col justify-between text-right pr-2 py-1 pointer-events-none">
-        <span className="text-xs text-zinc-400 leading-none">{dataMax.toFixed(1)}★</span>
-        <span className="text-xs text-zinc-400 leading-none">{dataMin.toFixed(1)}★</span>
+    <div>
+      {/* Bars */}
+      <div className="flex items-end gap-px h-32">
+        {days.map((date) => {
+          const rating = byDate[date]
+          const heightPct = rating ? (rating / 5) * 100 : 0
+          return (
+            <div key={date} className="flex-1 flex flex-col justify-end h-full group relative">
+              {rating !== undefined ? (
+                <>
+                  <div
+                    className={`w-full rounded-t transition-all ${barColor(rating)}`}
+                    style={{ height: `${heightPct}%` }}
+                  />
+                  {/* Tooltip on hover */}
+                  <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:flex flex-col items-center pointer-events-none z-10">
+                    <div className="bg-zinc-900 text-white text-xs rounded px-2 py-1 whitespace-nowrap">
+                      {date}<br />{rating.toFixed(2)} ★
+                    </div>
+                    <div className="w-1.5 h-1.5 bg-zinc-900 rotate-45 -mt-1" />
+                  </div>
+                </>
+              ) : (
+                <div className="w-full h-px bg-zinc-100" style={{ marginBottom: "0px" }} />
+              )}
+            </div>
+          )
+        })}
       </div>
 
-      <div className="ml-10">
-        <svg viewBox="0 0 100 100" className="h-40 w-full" preserveAspectRatio="none">
-          <defs>
-            <linearGradient id="graphGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#E62B1E" stopOpacity="0.18" />
-              <stop offset="100%" stopColor="#E62B1E" stopOpacity="0" />
-            </linearGradient>
-          </defs>
+      {/* X-axis date labels */}
+      <div className="flex justify-between mt-1.5">
+        {labelIdxs.map((i) => (
+          <span key={i} className="text-xs text-zinc-400">
+            {days[i].slice(5)}
+          </span>
+        ))}
+      </div>
 
-          {gridRatings.map((r) => (
-            <line key={r} x1="0" y1={toY(r)} x2="100" y2={toY(r)} stroke="#f4f4f5" strokeWidth="0.8" />
-          ))}
-
-          <polygon fill="url(#graphGrad)" points={areaPoints} />
-
-          <polyline
-            fill="none"
-            stroke="#E62B1E"
-            strokeWidth="1.5"
-            strokeLinejoin="round"
-            strokeLinecap="round"
-            points={pointStr}
-          />
-        </svg>
+      {/* Legend */}
+      <div className="flex items-center gap-4 mt-3 flex-wrap">
+        {[
+          { color: "bg-green-400", label: "≥ 4.0 Good" },
+          { color: "bg-amber-400", label: "3.0 – 3.9 Average" },
+          { color: "bg-red-500",   label: "< 3.0 At risk" },
+        ].map(({ color, label }) => (
+          <div key={label} className="flex items-center gap-1.5">
+            <div className={`w-2.5 h-2.5 rounded-sm ${color}`} />
+            <span className="text-xs text-zinc-400">{label}</span>
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -230,9 +245,13 @@ export default function ManagerDashboard() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [dailyStats, setDailyStats] = useState<ManagerDailyStats[]>([])
   const [criticalFeedback, setCriticalFeedback] = useState<CriticalFeedback[]>([])
+  const [liveStats, setLiveStats] = useState<Record<string, LiveStats>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const hasLoadedCriticalRef = useRef(false)
+  const criticalIdsRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     if (!user) { setLoading(false); return }
@@ -262,25 +281,40 @@ export default function ManagerDashboard() {
       query(
         collection(db, "managerDailyStats"),
         where("managerId", "==", user.uid),
-        orderBy("date", "desc"),
         limit(365),
       ),
-      (snap) => setDailyStats(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ManagerDailyStats)),
-      (err) => setError(err.message),
+      (snap) => {
+        const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ManagerDailyStats)
+        // Sort client-side so no composite index is required
+        docs.sort((a, b) => b.date.localeCompare(a.date))
+        setDailyStats(docs)
+      },
+      (err: any) => {
+        const msg = String(err?.message ?? "")
+        setError(msg || "Unable to fetch manager daily stats")
+      },
     )
 
     return () => unsub()
   }, [user])
 
   useEffect(() => {
-    if (sessions.length === 0) { setCriticalFeedback([]); return }
+    setCriticalFeedback([])
+    hasLoadedCriticalRef.current = false
+    criticalIdsRef.current = new Set()
 
-    const unsubs = sessions.slice(0, 4).map((session) => {
-      return onSnapshot(
+    if (!user || sessions.length === 0) return
+
+    const armTimer = setTimeout(() => {
+      hasLoadedCriticalRef.current = true
+    }, 800)
+
+    const unsubs = sessions.slice(0, 4).map((session) =>
+      onSnapshot(
         query(
           collection(db, "sessions", session.id, "feedback"),
           where("rating", "<=", 2),
-          limit(5),
+          limit(10),
         ),
         (snap) => {
           const items = snap.docs.map((d) => ({
@@ -289,17 +323,58 @@ export default function ManagerDashboard() {
             sessionTitle: session.title ?? "Untitled",
             comment: String(d.data().comment ?? ""),
             rating: Number(d.data().rating ?? 0),
-            createdAt: d.data().createdAt as Timestamp | undefined,
           }))
+
+          const newItem = items.find((i) => !criticalIdsRef.current.has(i.id))
+          items.forEach((i) => criticalIdsRef.current.add(i.id))
 
           setCriticalFeedback((cur) => {
             const filtered = cur.filter((f) => f.sessionId !== session.id)
-            return [...filtered, ...items].sort((a, b) => a.rating - b.rating).slice(0, 10)
+            return [...filtered, ...items]
+              .sort((a, b) => a.rating - b.rating)
+              .slice(0, 10)
           })
+
+          if (hasLoadedCriticalRef.current && newItem) {
+            setToast(`New critical feedback: ${newItem.sessionTitle} (${newItem.rating}★)`)
+            setTimeout(() => setToast(null), 4000)
+          }
+        },
+        (err: any) => {
+          // A deleted session can briefly trigger permission-denied before listeners cleanup.
+          if (err?.code === "permission-denied") return
+          setError(String(err?.message ?? "Unable to fetch critical feedback"))
         },
       )
-    })
+    )
 
+    return () => {
+      clearTimeout(armTimer)
+      unsubs.forEach((u) => u())
+    }
+  }, [user, sessions])
+
+  // Subscribe to all feedback per session to get live counts & averages
+  useEffect(() => {
+    setLiveStats({})
+    if (sessions.length === 0) return
+    const unsubs = sessions.map((session) =>
+      onSnapshot(
+        collection(db, "sessions", session.id, "feedback"),
+        (snap) => {
+          const count = snap.size
+          const ratingSum = snap.docs.reduce((s, d) => s + Number(d.data().rating ?? 0), 0)
+          setLiveStats((prev) => ({
+            ...prev,
+            [session.id]: { count, ratingSum, avg: count > 0 ? ratingSum / count : 0 },
+          }))
+        },
+        (err: any) => {
+          if (err?.code === "permission-denied") return
+          setError(String(err?.message ?? "Unable to fetch live feedback"))
+        },
+      )
+    )
     return () => unsubs.forEach((u) => u())
   }, [sessions])
 
@@ -312,17 +387,49 @@ export default function ManagerDashboard() {
   }
 
   const liveResponseCount = useMemo(
-    () => sessions.reduce((s, sess) => s + (sess.totalFeedback ?? 0), 0),
-    [sessions],
+    () => Object.values(liveStats).reduce((s, st) => s + st.count, 0),
+    [liveStats],
   )
 
   const liveAvgRating = useMemo(() => {
-    const valid = sessions.filter((s) => (s.totalFeedback ?? 0) > 0)
-    if (!valid.length) return 0
-    const totalSum = valid.reduce((s, sess) => s + (sess.ratingSum ?? 0), 0)
-    const totalCount = valid.reduce((s, sess) => s + (sess.totalFeedback ?? 0), 0)
-    return totalCount > 0 ? totalSum / totalCount : 0
-  }, [sessions])
+    const totalSum = Object.values(liveStats).reduce((s, st) => s + st.ratingSum, 0)
+    return liveResponseCount > 0 ? totalSum / liveResponseCount : 0
+  }, [liveStats, liveResponseCount])
+
+  // Use managerDailyStats when available; otherwise derive daily data directly
+  // from live session stats so the graph works without CF or seed data.
+  const graphData = useMemo((): ManagerDailyStats[] => {
+    if (dailyStats.length > 0) return dailyStats
+
+    const byDay = new Map<string, { ratingSum: number; count: number }>()
+    sessions.forEach((session) => {
+      const raw = (session as any).startedAt
+      if (!raw) return
+      const d = raw?.toDate ? raw.toDate() : new Date(raw)
+      const dateStr = d.toISOString().slice(0, 10)
+      const count = session.totalFeedback ?? 0
+      const ratingSum = session.ratingSum ?? 0
+      if (count === 0) return
+      const prev = byDay.get(dateStr) ?? { ratingSum: 0, count: 0 }
+      byDay.set(dateStr, { ratingSum: prev.ratingSum + ratingSum, count: prev.count + count })
+    })
+
+    return Array.from(byDay.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, { ratingSum, count }]) => ({
+        id: date,
+        managerId: user?.uid ?? "",
+        date,
+        sessionsHosted: 1,
+        feedbackReceived: count,
+        averageRating: count > 0 ? Number((ratingSum / count).toFixed(2)) : 0,
+      }))
+  }, [dailyStats, sessions, user])
+
+  const sortedSessions = useMemo(
+    () => [...sessions].sort((a, b) => (a.avgRating ?? 0) - (b.avgRating ?? 0)),
+    [sessions],
+  )
 
   if (authLoading) return null
 
@@ -332,6 +439,12 @@ export default function ManagerDashboard() {
     <div className="space-y-8">
 
       <PageHeader name={user.displayName || user.email || "Manager"} />
+
+      {toast && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+          {toast}
+        </div>
+      )}
 
       {error && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -364,10 +477,11 @@ export default function ManagerDashboard() {
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2">
-            {sessions.map((s) => (
+            {sortedSessions.map((s) => (
               <SessionCard
                 key={s.id}
                 session={s}
+                live={liveStats[s.id]}
                 onCopy={copyLink}
                 copied={copiedId === s.id}
               />
@@ -378,22 +492,11 @@ export default function ManagerDashboard() {
 
       {/* Performance graph */}
       <div className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-6">
-        <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-zinc-900">Daily Average Rating</h2>
-          <span className="text-xs text-zinc-400">{dailyStats.length} day{dailyStats.length !== 1 ? "s" : ""} of data</span>
+          <span className="text-xs text-zinc-400">Last 30 days</span>
         </div>
-        <p className="text-xs text-zinc-400 mb-4">Auto-scaled · updates as feedback arrives</p>
-        <DailyAverageGraph data={dailyStats} />
-        {dailyStats.length > 0 && (
-          <div className="flex justify-between mt-2 ml-10">
-            <span className="text-xs text-zinc-400">
-              {[...dailyStats].sort((a, b) => a.date.localeCompare(b.date))[0]?.date}
-            </span>
-            <span className="text-xs text-zinc-400">
-              {[...dailyStats].sort((a, b) => b.date.localeCompare(a.date))[0]?.date}
-            </span>
-          </div>
-        )}
+        <DailyAverageGraph data={graphData} />
       </div>
 
       {/* Critical feedback */}

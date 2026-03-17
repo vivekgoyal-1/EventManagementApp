@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "managerDailyStats",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "managerId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

@@ -6,7 +6,8 @@
       "Bash(npx tailwindcss:*)",
       "Bash(npx tsc:*)",
       "Bash(node -e \"console.log\\(require\\(''./node_modules/tailwindcss/package.json''\\).version\\)\")",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(npx firebase:*)"
     ]
   }
 }

@@ -84,8 +84,9 @@ export default function SessionDetail() {
     ? (session.startedAt as unknown as Timestamp)?.toDate?.()
     : null
 
-  const avg = session?.avgRating ?? 0
-  const count = session?.totalFeedback ?? 0
+  // Compute live from the feedback listener — no Cloud Function dependency
+  const count = feedback.length
+  const avg = count > 0 ? feedback.reduce((sum, f) => sum + f.rating, 0) / count : 0
   const isLow = avg > 0 && avg < 3
 
   return (

@@ -2,29 +2,42 @@
 
 ## 1. What You Built
 
-A real-time feedback platform for a full-day TEDx event. Attendees submit a star rating and comment for each session using a session-specific access code given to them by their Stage Manager. Each Stage Manager sees a live dashboard of their four sessions — average ratings, response counts, a critical feedback feed for low-rated comments, and a 365-day trend graph. The Event Director sees event-wide aggregates (total responses, overall average, top-5 leaderboard, at-risk sessions, and a 1-star alert), can drill into any individual session for a full rating distribution and comment list, and can generate an AI-powered PDF report for any date. Access control is enforced at the Firestore rules layer, not just the UI: managers are locked to their own sessions, and only attendees (not managers) can submit feedback, preventing falsification.
+This project is a real time feedback platform designed for a full day TEDx event.
+
+Attendees can submit a star rating and comment for each session using a session specific access code shared by the Stage Manager. Once feedback starts coming in, Stage Managers can monitor their sessions through a live dashboard showing:
+
+- average ratings
+- total responses
+- a feed of low rated comments
+- a trend graph of feedback across the event
+
+The Event Director dashboard shows event wide analytics including total feedback count, overall average rating, a leaderboard of top sessions, and alerts for sessions receiving 1 star feedback.
+
+The director can also open any session to view its full rating distribution and comments. In addition, the system can generate an AI assisted PDF summary report for feedback collected on a given date.
+
+Access control is handled at the Firestore rules level rather than just the UI. Stage Managers can only see their assigned sessions and cannot view other managers' data. Only attendees are allowed to submit feedback which prevents managers from manipulating ratings.
 
 ## 2. Schema Design
 
-```
+```text
 users/{uid}
   role, email, displayName
 
 sessions/{sessionId}
   title, managerId, managerEmail, managerName
-  accessCode          ← shared with attendees to gate submissions
+  accessCode
   startedAt, isActive
-  ratingSum, totalFeedback, avgRating   ← pre-computed aggregates
+  ratingSum, totalFeedback, avgRating
 
   feedback/{feedbackId}
     sessionId, userId, managerId
     rating, comment, accessCode, createdAt
 
   submittedBy/{userId}
-    userId, submittedAt   ← one doc per user; proves they submitted
+    userId, submittedAt
 
-feedback/{feedbackId}          ← top-level mirror, Cloud Function only
-  (same fields as subcollection feedback)
+feedback/{feedbackId}
+  (mirror copy created by Cloud Function)
 
 eventStats/global
   feedbackCount, ratingSum, avgRating, oneStarCount
@@ -33,91 +46,141 @@ managerDailyStats/{managerId}_{YYYY-MM-DD}
   managerId, date, feedbackReceived, ratingSum, averageRating
 ```
 
-**Why this structure:**
-Feedback is nested under sessions (`sessions/{id}/feedback`) so Firestore rules can scope a Stage Manager's read access to the path of their own session. A top-level `feedback` mirror is maintained by Cloud Functions for the Event Director's cross-session report query — querying across all session subcollections from the client is not possible in a single Firestore request. The session document stores pre-computed aggregates (`ratingSum`, `totalFeedback`, `avgRating`) so the Director's leaderboard and the Manager's dashboard read a single document per session rather than scanning every feedback document. Global stats are rolled into `eventStats/global` for the same reason — one document read regardless of feedback volume.
+### Why this structure
 
-**Alternative considered:** A flat `feedback` collection for everything. Rejected because it would require every Stage Manager query to filter by `managerId`, and Firestore cannot enforce "you can only query your own manager ID" purely at the rules layer without the nested path trick. The nested structure makes the path itself the access control boundary.
+Feedback documents are stored under the session path (`sessions/{id}/feedback`). This makes it easier to enforce security rules because a Stage Manager's access can be tied directly to the session path they own.
+
+However, the Event Director needs to query feedback across all sessions when generating reports. Since Firestore cannot easily query multiple nested collections in one request, a Cloud Function mirrors feedback into a top level feedback collection specifically for reporting.
+
+The session document also stores precomputed aggregates like `ratingSum`, `totalFeedback`, and `avgRating`. This allows dashboards to read just a single document instead of scanning all feedback entries.
+
+### Alternative considered
+
+An earlier design used a flat feedback collection with a `managerId` field. I decided against this because it makes rule based access control harder to enforce safely. Using the nested structure keeps the access boundary tied to the document path itself.
 
 ## 3. Architecture Decisions
 
-**Aggregates:**
-`onFeedbackCreated` (Firestore trigger) runs a single transaction that increments `sessions/{id}.ratingSum/totalFeedback/avgRating`, `eventStats/global`, and `managerDailyStats/{managerId}_{date}` atomically. This keeps read costs constant: the Director's dashboard always reads exactly three Firestore documents regardless of how many feedback entries exist.
+### Aggregates
 
-**Cloud Functions:**
-- `onFeedbackCreated` — trigger; handles all aggregation and mirrors feedback to the top-level collection. Also writes `submittedBy/{uid}` to record the submission.
-- `generateDayFeedbackReport` — callable; queries the mirror collection by date range, sends comments to Gemini 2.5 Flash, returns structured JSON summary with fallback to rule-based logic if the API is unavailable.
-- `seedDummyData` — callable; creates 4 realistic sessions (2 per manager, spread across 4 days) with 25 feedback entries each, timestamped on their respective session days so the date-range report query returns meaningful results.
-- `deleteSessionCascade` — callable; deletes session subcollection feedback in batches of 250 to avoid Firestore write limits.
-- `setUserRole` / `listUsersForRoleManagement` — callables for the Director's role management UI.
+A Firestore trigger called `onFeedbackCreated` runs whenever new feedback is submitted. Inside a transaction it updates:
 
-**Access control:**
-Firestore rules enforce isolation at the database level. The `isManagerOfSession(sessionId)` helper reads `sessions/{sessionId}.managerId` and compares it to `request.auth.uid`. This is called on every feedback read/write for managers. The Event Director reads through a separate rule branch that does not call that helper. No UI-only guard is trusted for data isolation.
+- session level aggregates
+- event level stats
+- daily manager statistics
+
+This ensures that dashboards can read constant time aggregates without scanning feedback documents.
+
+### Cloud Functions
+
+Several Cloud Functions handle backend logic:
+
+- `onFeedbackCreated`
+  updates aggregates and mirrors feedback to the top level collection.
+
+- `generateDayFeedbackReport`
+  queries feedback by date and generates a structured summary using Gemini. If the API fails, a rule based fallback summary is used.
+
+- `seedDummyData`
+  creates demo users, sessions, and realistic feedback for testing.
+
+- `deleteSessionCascade`
+  deletes sessions and their feedback safely in batches.
+
+- `setUserRole` and `listUsersForRoleManagement`
+  used by the Event Director to manage roles.
+
+### Access Control
+
+Security rules enforce strict role isolation.
+
+A helper function `isManagerOfSession(sessionId)` checks whether the current user is the manager assigned to that session. Managers can only read feedback belonging to sessions they manage.
+
+The Event Director has a separate rule path that allows event wide reads.
+
+No data isolation relies on UI checks alone.
 
 ## 4. Security Rules
 
-The Stage Manager restriction works as follows:
+Feedback documents live under:
 
-Feedback documents live at `sessions/{sessionId}/feedback/{feedbackId}`. The Firestore rule for reading feedback by a Stage Manager calls `isManagerOfSession(sessionId)`, which does a live `get()` on `sessions/{sessionId}` and checks that `data.managerId == request.auth.uid`. The `sessionId` comes from the document path, not from the request body — a manager cannot forge it. Because the check is tied to the path parameter, a Stage Manager who knows another session's document ID still cannot read or write that session's feedback: the rule will fetch the session doc, compare `managerId` to their UID, and deny access.
+`sessions/{sessionId}/feedback/{feedbackId}`
 
-The same helper guards the top-level `feedback` mirror: a Stage Manager can read a mirrored document only if `feedback.managerId == request.auth.uid` AND `isManagerOfSession(feedback.sessionId)` both pass. This double-check prevents a manager from querying the mirror collection with a forged `managerId` field.
+When a Stage Manager attempts to read feedback, the rule checks:
 
-**Additional rule guarantees added in this version:**
-- Feedback `create` requires `isAttendee()` — managers are explicitly excluded, so they cannot falsify data even if they know the session ID and access code.
-- Feedback `create` checks `request.resource.data.accessCode == get(session).data.accessCode` — only attendees with the code shared by the manager can submit.
-- Feedback `create` checks `!exists(sessions/{id}/submittedBy/{uid})` — enforces one submission per user per session at the database level.
-- `submittedBy` documents are immutable once created (no `update` or `delete`) so a user cannot delete their marker to re-enable submission.
+`sessions/{sessionId}.managerId == request.auth.uid`
 
-## 5. Your Own Features
+Because the session ID comes from the document path, it cannot be forged in the request body.
 
-### Feature A: Critical Feedback Feed (Stage Manager)
+Even if a manager somehow guesses another session ID, the rule will fetch that session document and deny access if the manager ID does not match.
 
-**Problem:** After a session ends a manager has 20 minutes before the next one starts. They need to know immediately if something went badly wrong — not by scrolling through 25 comments, but by seeing the worst ones first.
+### Additional safeguards
 
-**Who it's for:** Stage Manager.
+- Only attendees can create feedback
+- Access code must match the session's stored code
+- Each user can submit only once per session
+- `submittedBy` documents are immutable once written
 
-**How it works:** A real-time listener queries `sessions/{id}/feedback` with `rating <= 2` for each of the manager's sessions. Results are merged, sorted by rating ascending, and shown in a dedicated panel on the manager dashboard.
+This prevents both duplicate submissions and data manipulation.
 
-**Tradeoff:** Up to 4 parallel Firestore listeners (one per session). A single server-side fan-out query would be cleaner at scale, but the per-session listener approach avoids a Cloud Function call and gives sub-second latency for a small session count.
+## 5. Custom Features
 
-### Feature B: Session Drill-Down (Both roles)
+### Critical Feedback Feed
 
-**Problem:** The dashboard shows aggregate numbers but gives no way to investigate *why* a session is underperforming. An Event Director who sees a 2.4 average needs to read the actual comments to understand the problem.
+Stage Managers often have only a short gap between sessions. Instead of scanning all feedback, the dashboard highlights comments with ratings of 2 stars or lower.
 
-**Who it's for:** Stage Manager (own sessions) and Event Director (all sessions).
+A real time query listens for low rated feedback across the manager's sessions and shows the most critical issues first.
 
-**How it works:** Every session row in both dashboards links to `/session/:id`. The detail page shows a real-time rating distribution bar chart (1★–5★ with percentage fills) and a live-updating list of all feedback, sorted newest first, with low-rated items highlighted in red.
+The implementation uses one listener per session. While not the most scalable design, it keeps the system simple and provides near instant updates for small session counts.
 
-**Tradeoff:** The feedback list loads all documents for the session in one listener — fine for 25–100 responses, but would need pagination for very large sessions. Accepted this tradeoff to keep the implementation simple for a one-day event format.
+### Session Drill Down
 
-### Feature C: Session Access Codes (Attendee verification + anti-falsification)
+Aggregate metrics alone do not explain why a session performed poorly.
 
-**Problem:** Two problems the original build did not address: (1) nothing stopped an attendee from submitting feedback for a session they did not attend; (2) nothing stopped a manager from submitting fake feedback to inflate their scores.
+Clicking any session opens a detail page that shows:
 
-**Who it's for:** Stage Manager (distributes the code), Attendee (enters it), Event Director (protected by the rules).
+- rating distribution chart
+- full comment list
+- highlighted low rated feedback
 
-**How it works:** Each session is assigned a short alphanumeric access code (`accessCode` field) when created. The manager sees the code on their dashboard and can copy a pre-filled feedback link to share with attendees. The Firestore rule for feedback creation validates the submitted code against the stored session code. Managers are excluded from the feedback `create` rule entirely, so they cannot submit feedback through any client. A `submittedBy/{uid}` subcollection tracks who has submitted; the rule checks `!exists()` before allowing a new entry, enforcing one submission per user per session at the database level.
+Both Stage Managers and the Event Director can use this page to inspect sessions in detail.
 
-**Tradeoff:** The access code is a shared secret — anyone with the link can submit. A proper solution would use signed short-lived tokens. Accepted this tradeoff because token generation requires an additional Cloud Function and the code approach is sufficient to prevent casual cross-session or duplicate submissions at a physical event.
+For this prototype the page loads all feedback for the session. Pagination could be added if sessions receive very large response volumes.
+
+### Session Access Codes
+
+To ensure feedback comes from real attendees, each session has a short access code.
+
+Attendees must enter this code when submitting feedback. The Firestore rule validates the submitted code against the stored session code.
+
+Managers cannot create feedback entries because the rule explicitly restricts creation to attendees only.
+
+A `submittedBy` collection records which users have submitted feedback for a session, ensuring one submission per user.
+
+This approach is simple but effective for a physical event setting.
 
 ## 6. AI Usage
 
-Claude (Sonnet) was used throughout this project as a coding assistant. Here is an honest account of where it helped and where it fell short:
+AI tools were used mainly as development assistance, not to design the entire system.
 
-**Schema design:** The initial AI suggestion was a flat `feedback` collection with a `managerId` field. I rejected this because Firestore rules cannot enforce "you can only query where managerId == your uid" without also allowing any manager to attempt the query and be denied only at read time — which still exposes document IDs. The nested `sessions/{id}/feedback` structure ties access to the document path, which Firestore rules can enforce cleanly. I made this decision and rewrote the schema.
+They were helpful for generating initial scaffolding such as React components, TypeScript interfaces, and Firebase setup code. However, most architecture and security decisions were revised manually after reviewing the generated suggestions.
 
-**Firestore rules:** AI generated a first draft that allowed Stage Managers to create feedback for their assigned sessions. This is a falsification risk — a manager could submit fake 5-star ratings. I removed `isManagerOfSession` from the feedback `create` rule and restricted creation to `isAttendee()` only.
+For example, the first schema suggestion used a flat feedback collection. After thinking through Firestore rule limitations, I switched to the nested session structure to make access control easier to enforce.
 
-**Seed data:** The initial seed data used generic placeholder comments ("Seed comment 1 for Session X") which produce meaningless AI summaries. I replaced all 100 comments with realistic TED-style feedback, varying by session topic, rating tier, and specificity, so the Gemini summary has something worth analysing.
+Similarly, the initial security rules allowed Stage Managers to create feedback entries. I removed that permission because it could allow rating manipulation.
 
-**`buildSummary` fallback:** AI generated a fallback function with a literal debug string ` this is coded` prepended to the `wentWell` field. I caught and removed this.
+AI was also used to help draft some utility functions and UI components, but these were reviewed and adjusted during implementation.
 
-**`onFeedbackCreated` trigger:** The original Cloud Function did not update `managerDailyStats` in real time — daily stats were only seeded, never updated from live submissions. I added the daily stats update inside the existing transaction.
+The final system architecture, schema structure, and rule design were decided during development rather than being taken directly from generated output.
 
-**General scaffolding:** React component structure, Tailwind class selection, TypeScript interfaces, and Firebase SDK boilerplate were largely AI-generated and used with minor adjustments.
+## 7. What I'd Improve With More Time
 
-## 7. What You'd Do With More Time
+One improvement would be replacing the static session access code with a short lived signed token generated by a Cloud Function.
 
-Replace the shared access code with a signed, short-lived session token generated by a Cloud Function and embedded in a QR code displayed by the Stage Manager. The current code is a static string tied to the session — it never expires and can be forwarded. A token approach would let the Director set a submission window (e.g., 30 minutes after session end) after which the link stops working, making the feedback data more trustworthy and time-anchored. This would require one new callable function and a change to the Firestore rule, but would significantly strengthen the anti-fraud guarantee that the `submittedBy` collection currently provides only for duplicates, not for late or out-of-session submissions.
+The current access code works well to prevent accidental cross session submissions, but it does not expire and could be shared after the session ends.
+
+A token based system could enforce a submission window, such as allowing feedback only within 30 minutes after the session finishes.
+
+This would make the feedback data more reliable and better tied to the actual event timeline.
 
 ## Local Setup
 

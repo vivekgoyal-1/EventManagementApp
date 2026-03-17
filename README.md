@@ -257,3 +257,54 @@ Seeded sessions and their access codes:
 | `/director/sessions` | Event Director | Create / remove sessions |
 | `/director/roles` | Event Director | Assign user roles |
 | `/session/:id` | Manager / Director | Session drill-down detail |
+| `/profile` | All | Edit display name |
+
+---
+
+## 8. Post-Submission Improvements
+
+After the initial version was submitted, several bugs were fixed and new features were added based on testing the live system.
+
+### Bugs Fixed
+
+**Session detail page not loading**
+
+When a manager or director clicked "View Details" on a session, the page would crash or show nothing. The root cause was two `useMemo` hooks being called after early return guards in the component, which violates React's Rules of Hooks. React requires hooks to always be called in the same order on every render — calling them after a conditional return breaks that. The fix was simply to move both `useMemo` calls above all the early returns.
+
+There was also a secondary issue where the feedback query used `orderBy("createdAt", "desc")`. Firestore needs a composite index for this kind of query and it hadn't been deployed yet, so the query was silently failing. The fix was to remove the `orderBy` from the Firestore query and sort the results in JavaScript instead after they arrive.
+
+**Graph not showing after submitting feedback**
+
+The manager dashboard has a bar graph showing daily average ratings over the past year. After submitting new feedback the graph would stay empty or show no data. This turned out to be a two part problem.
+
+First, a `orderBy("date", "desc")` had been added to the `managerDailyStats` query which required a composite Firestore index that wasn't deployed. This silently killed the query. The fix was to remove the `orderBy` and sort the results client-side.
+
+Second and more importantly, the Cloud Function `onFeedbackCreated` which is supposed to update `managerDailyStats` and session aggregates whenever feedback is submitted was failing with a runtime error. Firestore's Admin SDK (used inside Cloud Functions) requires that all reads inside a transaction happen before any writes. The function was doing a read inside a loop after writes had already started, which caused it to throw every single time. The same bug existed in `deleteSessionCascade`. Both were fixed by moving all reads to the top of the transaction before any writes happen.
+
+
+### New Features Added
+
+**Feedback open/close toggle for Stage Managers**
+
+Managers can now control whether attendees are allowed to submit feedback for their sessions. Each session card on the manager dashboard has a button that shows "Open Feedback" or "Feedback Open" depending on the current state. Clicking it toggles the `isActive` field on the session document. The Firestore security rule for feedback creation was updated to require `isActive === true`, so even if someone bypasses the UI they still cannot submit to a closed session.
+
+The button is disabled if the session's `startedAt` time is still in the future, so managers cannot accidentally open feedback before a session begins.
+
+**Attendee feedback form only shows active sessions**
+
+The feedback submission form previously listed all sessions in the dropdown regardless of whether they were open for feedback. Now it only shows sessions where `isActive === true`. This is enforced both by filtering the Firestore query server-side and by the security rule. If a session closes while an attendee has the form open, their submission will be rejected.
+
+**User profile page**
+
+Users can now edit their display name from a profile page at `/profile`. The sidebar footer shows the user's avatar and name and clicking it navigates to the profile page. The update writes to both Firebase Auth and the Firestore user document at the same time. The Firestore security rule was updated to allow users to update only their own `displayName` field — all other fields like `role` and `email` remain protected.
+
+### Code Cleanup
+
+A shared utility file (`src/lib/utils.ts`) was added with two helper functions that were previously copy-pasted across multiple files:
+
+- `getInitials(user)` — turns a display name or email into 2-letter initials for the avatar. Was duplicated in the sidebar and profile page.
+- `toDate(value)` — safely converts a Firestore Timestamp to a JavaScript Date. Was duplicated in four different places with slightly different implementations.
+
+The sidebar was also changed from `min-h-screen` to `h-screen sticky top-0` so the user footer with the sign out button stays visible at all times without needing to scroll to the bottom of the page.
+
+Several efficiency improvements were made to reduce unnecessary Firestore reads. The manager dashboard previously opened two separate listeners per session (one for live stats, one for critical feedback). These were merged into a single listener per session that computes both in one callback, cutting the number of open connections in half. The feedback form also no longer makes an extra `getDoc` call on submit since the session data is already loaded in memory from the live listener.

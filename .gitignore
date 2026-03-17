@@ -9,6 +9,7 @@ functions/lib
 !.env.example
 
 .vscode
+.claude/
 .claude
 .DS_Store
 .firebase/

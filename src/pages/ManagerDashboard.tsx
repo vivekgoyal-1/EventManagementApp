@@ -9,6 +9,7 @@ import {
 } from "firebase/firestore"
 
 import { db } from "../services/firebase"
+import { StatCard } from "../components/StatCard"
 import { ManagerDailyStats, Session } from "../types"
 import { useAuth } from "../hooks/useAuth"
 
@@ -23,43 +24,40 @@ type CriticalFeedback = {
 function PageHeader({ name }: { name: string }) {
   return (
     <div className="mb-8">
-      <p className="text-xs font-semibold uppercase tracking-widest text-ted mb-1">
-        Stage Manager
-      </p>
+      <p className="text-xs font-semibold uppercase tracking-widest text-ted mb-1">Stage Manager</p>
       <h1 className="text-3xl font-black text-zinc-900 tracking-tight">{name}</h1>
       <p className="text-sm text-zinc-500 mt-1">Live session monitoring</p>
     </div>
   )
 }
 
-function StatCard({ label, value, sub }: { label: string; value: any; sub?: string }) {
-  return (
-    <div className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-6">
-      <p className="text-xs font-semibold uppercase tracking-widest text-zinc-400">{label}</p>
-      <p className="mt-3 text-4xl font-black text-zinc-900 tabular-nums leading-none">{value}</p>
-      {sub && <p className="mt-1.5 text-xs text-zinc-400">{sub}</p>}
-    </div>
-  )
-}
-
 type LiveStats = { count: number; ratingSum: number; avg: number }
 
-function SessionCard({ session, live, onCopy, copied }: {
+function SessionCard({
+  session,
+  live,
+  onCopy,
+  copied,
+}: {
   session: Session
   live?: LiveStats
   onCopy: (s: Session) => void
   copied: boolean
 }) {
-  const avg   = live ? live.avg   : (session.avgRating    ?? 0)
+  const [showLink, setShowLink] = useState(false)
+  const avg = live ? live.avg : (session.avgRating ?? 0)
   const count = live ? live.count : (session.totalFeedback ?? 0)
   const isLow = avg > 0 && avg < 3
   const isGood = avg >= 4
+
+  const shareUrl = `${window.location.origin}/home?session=${session.id}&code=${session.accessCode ?? ""}`
 
   return (
     <div className={`bg-white rounded-2xl border shadow-sm p-5 flex flex-col gap-4 transition-shadow hover:shadow-md ${
       isLow ? "border-red-200" : "border-zinc-100"
     }`}>
 
+      {/* Title + rating badge */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="font-semibold text-zinc-900 leading-snug line-clamp-2">
@@ -72,17 +70,13 @@ function SessionCard({ session, live, onCopy, copied }: {
 
         <div className="shrink-0 text-right">
           <span className={`inline-block rounded-full px-2.5 py-0.5 text-sm font-bold ${
-            count === 0
-              ? "bg-zinc-100 text-zinc-400"
-              : isLow
-              ? "bg-red-100 text-red-700"
-              : isGood
-              ? "bg-green-100 text-green-700"
-              : "bg-amber-100 text-amber-700"
+            count === 0 ? "bg-zinc-100 text-zinc-400" :
+            isLow ? "bg-red-100 text-red-700" :
+            isGood ? "bg-green-100 text-green-700" :
+            "bg-amber-100 text-amber-700"
           }`}>
             {count === 0 ? "—" : avg.toFixed(2)} ★
           </span>
-
           <p className={`text-xs font-semibold mt-1 ${
             count === 0 ? "text-zinc-400" : isLow ? "text-red-600" : "text-green-600"
           }`}>
@@ -91,54 +85,85 @@ function SessionCard({ session, live, onCopy, copied }: {
         </div>
       </div>
 
+      {/* Access code + share */}
       {session.accessCode && (
-        <div className="rounded-lg bg-zinc-50 border border-zinc-100 px-3 py-2 flex items-center justify-between">
-          <div>
-            <p className="text-xs text-zinc-400 uppercase tracking-widest font-semibold">Access Code</p>
-            <p className="font-mono font-bold text-zinc-800 text-sm mt-0.5">{session.accessCode}</p>
+        <div className="rounded-xl bg-zinc-50 border border-zinc-100 p-3 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <p className="text-xs text-zinc-400 uppercase tracking-widest font-semibold">Access Code</p>
+              <p className="font-mono font-bold text-zinc-800 text-lg tracking-widest mt-0.5">
+                {session.accessCode}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowLink((v) => !v)}
+                className="text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-zinc-200 text-zinc-600 hover:bg-zinc-300 transition-colors"
+              >
+                {showLink ? "Hide link" : "Share link"}
+              </button>
+              <button
+                onClick={() => onCopy(session)}
+                className={`text-xs font-semibold px-2.5 py-1.5 rounded-lg transition-colors ${
+                  copied ? "bg-green-100 text-green-700" : "bg-zinc-900 text-white hover:bg-zinc-700"
+                }`}
+              >
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            </div>
           </div>
-          <button
-            onClick={() => onCopy(session)}
-            className={`text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors ${
-              copied
-                ? "bg-green-100 text-green-700"
-                : "bg-zinc-200 text-zinc-600 hover:bg-zinc-300"
-            }`}
-          >
-            {copied ? "Copied!" : "Share"}
-          </button>
+
+          {showLink && (
+            <div className="space-y-1">
+              <p className="text-xs text-zinc-400">
+                Share this link with attendees — the access code is pre-filled.
+                Only share it in-room during or immediately after your session.
+              </p>
+              <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 font-mono text-xs text-zinc-600 break-all select-all">
+                {shareUrl}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
+      {/* View details button */}
       <Link
         to={`/session/${session.id}`}
         className="flex items-center justify-center gap-1.5 rounded-xl bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-ted transition-colors"
       >
         View Details →
       </Link>
-
     </div>
   )
 }
 
-const WINDOW = 30
+// ─── 365-day performance graph ───────────────────────────────────────────────
+
+const WINDOW = 365
 
 function DailyAverageGraph({ data }: { data: ManagerDailyStats[] }) {
-  // Build a lookup of the last WINDOW days regardless of what data exists
-  const days = Array.from({ length: WINDOW }, (_, i) => {
-    const d = new Date()
-    d.setUTCDate(d.getUTCDate() - (WINDOW - 1 - i))
-    return d.toISOString().slice(0, 10)
-  })
+  const days = useMemo(
+    () =>
+      Array.from({ length: WINDOW }, (_, i) => {
+        const d = new Date()
+        d.setUTCDate(d.getUTCDate() - (WINDOW - 1 - i))
+        return d.toISOString().slice(0, 10)
+      }),
+    [],
+  )
 
-  const byDate = Object.fromEntries(data.map((d) => [d.date, d.averageRating]))
+  const byDate = useMemo(
+    () => Object.fromEntries(data.map((d) => [d.date, d.averageRating])),
+    [data],
+  )
 
   const hasAny = days.some((d) => byDate[d] !== undefined)
 
   if (!hasAny) {
     return (
       <div className="flex items-center justify-center h-36 rounded-xl border border-dashed border-zinc-200 text-sm text-zinc-400">
-        No data in the last {WINDOW} days — submit feedback to see results here
+        No data in the last 365 days — run the seed or submit feedback to populate this graph
       </div>
     )
   }
@@ -146,25 +171,33 @@ function DailyAverageGraph({ data }: { data: ManagerDailyStats[] }) {
   const barColor = (r: number) =>
     r >= 4 ? "bg-green-400" : r >= 3 ? "bg-amber-400" : "bg-red-500"
 
-  // Date labels: first, middle, last
-  const labelIdxs = [0, Math.floor(WINDOW / 2), WINDOW - 1]
+  // Month boundary labels (first day of each month visible in window)
+  const monthLabels: { idx: number; label: string }[] = []
+  days.forEach((date, idx) => {
+    if (date.endsWith("-01") || idx === 0 || idx === WINDOW - 1) {
+      monthLabels.push({ idx, label: date.slice(0, 7) })
+    }
+  })
 
   return (
     <div>
       {/* Bars */}
-      <div className="flex items-end gap-px h-32">
+      <div className="flex items-end h-28" style={{ gap: "0px" }}>
         {days.map((date) => {
           const rating = byDate[date]
           const heightPct = rating ? (rating / 5) * 100 : 0
           return (
-            <div key={date} className="flex-1 flex flex-col justify-end h-full group relative">
+            <div
+              key={date}
+              className="flex-1 flex flex-col justify-end h-full group relative"
+              style={{ minWidth: 0 }}
+            >
               {rating !== undefined ? (
                 <>
                   <div
-                    className={`w-full rounded-t transition-all ${barColor(rating)}`}
+                    className={`w-full transition-all ${barColor(rating)}`}
                     style={{ height: `${heightPct}%` }}
                   />
-                  {/* Tooltip on hover */}
                   <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:flex flex-col items-center pointer-events-none z-10">
                     <div className="bg-zinc-900 text-white text-xs rounded px-2 py-1 whitespace-nowrap">
                       {date}<br />{rating.toFixed(2)} ★
@@ -173,18 +206,22 @@ function DailyAverageGraph({ data }: { data: ManagerDailyStats[] }) {
                   </div>
                 </>
               ) : (
-                <div className="w-full h-px bg-zinc-100" style={{ marginBottom: "0px" }} />
+                <div className="w-full h-px bg-zinc-100" />
               )}
             </div>
           )
         })}
       </div>
 
-      {/* X-axis date labels */}
-      <div className="flex justify-between mt-1.5">
-        {labelIdxs.map((i) => (
-          <span key={i} className="text-xs text-zinc-400">
-            {days[i].slice(5)}
+      {/* X-axis month labels */}
+      <div className="relative h-5 mt-1.5">
+        {monthLabels.slice(0, 13).map(({ idx, label }) => (
+          <span
+            key={label}
+            className="absolute text-xs text-zinc-400 -translate-x-1/2"
+            style={{ left: `${(idx / (WINDOW - 1)) * 100}%` }}
+          >
+            {label.slice(5)}
           </span>
         ))}
       </div>
@@ -194,7 +231,7 @@ function DailyAverageGraph({ data }: { data: ManagerDailyStats[] }) {
         {[
           { color: "bg-green-400", label: "≥ 4.0 Good" },
           { color: "bg-amber-400", label: "3.0 – 3.9 Average" },
-          { color: "bg-red-500",   label: "< 3.0 At risk" },
+          { color: "bg-red-500", label: "< 3.0 At risk" },
         ].map(({ color, label }) => (
           <div key={label} className="flex items-center gap-1.5">
             <div className={`w-2.5 h-2.5 rounded-sm ${color}`} />
@@ -205,6 +242,8 @@ function DailyAverageGraph({ data }: { data: ManagerDailyStats[] }) {
     </div>
   )
 }
+
+// ─── critical feedback feed ───────────────────────────────────────────────────
 
 function CriticalFeed({ feedback }: { feedback: CriticalFeedback[] }) {
   if (feedback.length === 0) {
@@ -230,14 +269,14 @@ function CriticalFeed({ feedback }: { feedback: CriticalFeedback[] }) {
               {item.rating}★
             </span>
           </div>
-          <p className="text-sm text-zinc-700 leading-snug">
-            {item.comment || "No comment"}
-          </p>
+          <p className="text-sm text-zinc-700 leading-snug">{item.comment || "No comment"}</p>
         </li>
       ))}
     </ul>
   )
 }
+
+// ─── main component ───────────────────────────────────────────────────────────
 
 export default function ManagerDashboard() {
   const { user, loading: authLoading } = useAuth()
@@ -252,20 +291,34 @@ export default function ManagerDashboard() {
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const hasLoadedCriticalRef = useRef(false)
   const criticalIdsRef = useRef<Set<string>>(new Set())
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sessionsRef = useRef<Session[]>([])
 
+  // Stable string of session IDs — used as effect dependency to avoid
+  // re-subscribing all listeners every time onSnapshot returns a new array
+  // reference with the same underlying data.
+  const sessionIdKey = useMemo(
+    () => sessions.map((s) => s.id).sort().join(","),
+    [sessions],
+  )
+
+  // Fetch assigned sessions — keep sessionsRef in sync so child effects can
+  // read current session metadata without adding sessions to their dep arrays.
   useEffect(() => {
     if (!user) { setLoading(false); return }
 
     const q = query(
       collection(db, "sessions"),
       where("managerId", "==", user.uid),
-      limit(4),
+      limit(10),
     )
 
     const unsub = onSnapshot(
       q,
       (snapshot) => {
-        setSessions(snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as Session))
+        const next = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as Session)
+        sessionsRef.current = next
+        setSessions(next)
         setLoading(false)
       },
       (err) => { setError(err.message || "Unable to fetch sessions"); setLoading(false) },
@@ -274,6 +327,7 @@ export default function ManagerDashboard() {
     return () => unsub()
   }, [user])
 
+  // 365-day daily stats for graph
   useEffect(() => {
     if (!user) return
 
@@ -284,32 +338,36 @@ export default function ManagerDashboard() {
         limit(365),
       ),
       (snap) => {
+        // Sort newest-first client-side — no composite index needed.
         const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ManagerDailyStats)
-        // Sort client-side so no composite index is required
         docs.sort((a, b) => b.date.localeCompare(a.date))
         setDailyStats(docs)
       },
       (err: any) => {
         const msg = String(err?.message ?? "")
-        setError(msg || "Unable to fetch manager daily stats")
+        if (msg) setError(msg)
       },
     )
 
     return () => unsub()
   }, [user])
 
+  // Critical feedback listener (≤2 stars).
+  // Depends on sessionIdKey (stable string) instead of the sessions array to
+  // avoid re-subscribing every time onSnapshot returns a new array reference.
   useEffect(() => {
     setCriticalFeedback([])
     hasLoadedCriticalRef.current = false
     criticalIdsRef.current = new Set()
 
-    if (!user || sessions.length === 0) return
+    const current = sessionsRef.current
+    if (!user || current.length === 0) return
 
     const armTimer = setTimeout(() => {
       hasLoadedCriticalRef.current = true
     }, 800)
 
-    const unsubs = sessions.slice(0, 4).map((session) =>
+    const unsubs = current.slice(0, 10).map((session) =>
       onSnapshot(
         query(
           collection(db, "sessions", session.id, "feedback"),
@@ -330,18 +388,16 @@ export default function ManagerDashboard() {
 
           setCriticalFeedback((cur) => {
             const filtered = cur.filter((f) => f.sessionId !== session.id)
-            return [...filtered, ...items]
-              .sort((a, b) => a.rating - b.rating)
-              .slice(0, 10)
+            return [...filtered, ...items].sort((a, b) => a.rating - b.rating).slice(0, 10)
           })
 
           if (hasLoadedCriticalRef.current && newItem) {
             setToast(`New critical feedback: ${newItem.sessionTitle} (${newItem.rating}★)`)
-            setTimeout(() => setToast(null), 4000)
+            if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current)
+            toastTimeoutRef.current = setTimeout(() => setToast(null), 4000)
           }
         },
         (err: any) => {
-          // A deleted session can briefly trigger permission-denied before listeners cleanup.
           if (err?.code === "permission-denied") return
           setError(String(err?.message ?? "Unable to fetch critical feedback"))
         },
@@ -350,15 +406,19 @@ export default function ManagerDashboard() {
 
     return () => {
       clearTimeout(armTimer)
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current)
       unsubs.forEach((u) => u())
     }
-  }, [user, sessions])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, sessionIdKey])
 
-  // Subscribe to all feedback per session to get live counts & averages
+  // Live counts and averages per session.
+  // Same stable-key pattern to prevent listener thrashing.
   useEffect(() => {
     setLiveStats({})
-    if (sessions.length === 0) return
-    const unsubs = sessions.map((session) =>
+    const current = sessionsRef.current
+    if (current.length === 0) return
+    const unsubs = current.map((session) =>
       onSnapshot(
         collection(db, "sessions", session.id, "feedback"),
         (snap) => {
@@ -376,7 +436,8 @@ export default function ManagerDashboard() {
       )
     )
     return () => unsubs.forEach((u) => u())
-  }, [sessions])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionIdKey])
 
   function copyLink(session: Session) {
     const url = `${window.location.origin}/home?session=${session.id}&code=${session.accessCode ?? ""}`
@@ -396,8 +457,7 @@ export default function ManagerDashboard() {
     return liveResponseCount > 0 ? totalSum / liveResponseCount : 0
   }, [liveStats, liveResponseCount])
 
-  // Use managerDailyStats when available; otherwise derive daily data directly
-  // from live session stats so the graph works without CF or seed data.
+  // Use managerDailyStats for graph; derive from session data when unavailable
   const graphData = useMemo((): ManagerDailyStats[] => {
     if (dailyStats.length > 0) return dailyStats
 
@@ -426,13 +486,21 @@ export default function ManagerDashboard() {
       }))
   }, [dailyStats, sessions, user])
 
+  // Sort sessions: at-risk first, then by avg rating descending
   const sortedSessions = useMemo(
-    () => [...sessions].sort((a, b) => (a.avgRating ?? 0) - (b.avgRating ?? 0)),
-    [sessions],
+    () =>
+      [...sessions].sort((a, b) => {
+        const aAvg = liveStats[a.id]?.avg ?? a.avgRating ?? 0
+        const bAvg = liveStats[b.id]?.avg ?? b.avgRating ?? 0
+        const aRisk = aAvg > 0 && aAvg < 3 ? 0 : 1
+        const bRisk = bAvg > 0 && bAvg < 3 ? 0 : 1
+        if (aRisk !== bRisk) return aRisk - bRisk
+        return bAvg - aAvg
+      }),
+    [sessions, liveStats],
   )
 
   if (authLoading) return null
-
   if (!user) return <p className="text-zinc-500">Please sign in.</p>
 
   return (
@@ -452,7 +520,7 @@ export default function ManagerDashboard() {
         </div>
       )}
 
-      {/* Stats */}
+      {/* Stats summary */}
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard label="Sessions" value={sessions.length} sub="assigned to you" />
         <StatCard label="Total Responses" value={liveResponseCount} sub="across all sessions" />
@@ -463,11 +531,14 @@ export default function ManagerDashboard() {
         />
       </div>
 
-      {/* Sessions grid */}
+      {/* Sessions grid — at-risk shown first */}
       <div>
-        <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400 mb-4">
-          Your Sessions
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400">
+            Your Sessions
+          </h2>
+          <p className="text-xs text-zinc-400">At-risk sessions sorted to top</p>
+        </div>
 
         {loading ? (
           <p className="text-sm text-zinc-400">Loading sessions…</p>
@@ -490,22 +561,42 @@ export default function ManagerDashboard() {
         )}
       </div>
 
-      {/* Performance graph */}
+      {/* 365-day performance graph */}
       <div className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-zinc-900">Daily Average Rating</h2>
-          <span className="text-xs text-zinc-400">Last 30 days</span>
+          <span className="text-xs text-zinc-400">Past 365 days</span>
         </div>
         <DailyAverageGraph data={graphData} />
       </div>
 
-      {/* Critical feedback */}
+      {/* How to distribute feedback forms — brief guidance */}
+      <div className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-6">
+        <h2 className="text-sm font-semibold text-zinc-900 mb-1">Distributing Feedback Securely</h2>
+        <p className="text-xs text-zinc-500 mb-4">
+          The access code gates your session's feedback form — only attendees you share it with can submit.
+        </p>
+        <ul className="space-y-2 text-sm text-zinc-600">
+          {[
+            "Share the code or link verbally or on screen only inside the venue during or immediately after your session.",
+            "Do not post the code publicly or share it in advance — this lets the director verify that submissions came from genuine attendees.",
+            "Each attendee can submit only once per session. If you see fewer unique submitters than responses, contact the Event Director.",
+          ].map((tip, i) => (
+            <li key={i} className="flex gap-2">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-zinc-100 text-zinc-500 text-xs font-bold flex items-center justify-center mt-0.5">
+                {i + 1}
+              </span>
+              <span>{tip}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Critical feedback feed */}
       <div className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-6">
         <div className="flex items-center gap-2 mb-4">
           <h2 className="text-sm font-semibold text-zinc-900">Critical Feedback</h2>
-          <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700">
-            ≤ 2★
-          </span>
+          <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700">≤ 2★</span>
         </div>
         <CriticalFeed feedback={criticalFeedback} />
       </div>

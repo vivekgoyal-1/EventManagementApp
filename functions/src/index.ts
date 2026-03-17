@@ -589,6 +589,7 @@ export const deleteSessionCascade = onCall({ region: REGION }, async (request) =
   return { ok: true, deletedSessionId: sessionId };
 });
 
+
 export const seedDummyData = onCall({ region: REGION }, async (request) => {
   const auth = request.auth;
   if (!auth?.uid) {
@@ -676,7 +677,8 @@ export const seedDummyData = onCall({ region: REGION }, async (request) => {
     );
   }
 
-  // 4 sessions total — one per day over the last 4 days; 2 per manager
+  // 8 sessions total — 4 per manager, one per day over the last 8 days.
+  // Each has 25 realistic feedback entries → 200 total feedback points.
   const sessions = [
     {
       id: "session-ai-healthcare",
@@ -685,7 +687,7 @@ export const seedDummyData = onCall({ region: REGION }, async (request) => {
       managerEmail: "manager1@pulse.local",
       managerName: "Priya Sharma",
       accessCode: "AH2025",
-      date: daysAgo(4),
+      date: daysAgo(8),
     },
     {
       id: "session-urban-mobility",
@@ -694,7 +696,7 @@ export const seedDummyData = onCall({ region: REGION }, async (request) => {
       managerEmail: "manager2@pulse.local",
       managerName: "James Okafor",
       accessCode: "UM2025",
-      date: daysAgo(3),
+      date: daysAgo(7),
     },
     {
       id: "session-ocean-tech",
@@ -703,7 +705,7 @@ export const seedDummyData = onCall({ region: REGION }, async (request) => {
       managerEmail: "manager1@pulse.local",
       managerName: "Priya Sharma",
       accessCode: "OC2025",
-      date: daysAgo(2),
+      date: daysAgo(6),
     },
     {
       id: "session-mental-health",
@@ -712,6 +714,42 @@ export const seedDummyData = onCall({ region: REGION }, async (request) => {
       managerEmail: "manager2@pulse.local",
       managerName: "James Okafor",
       accessCode: "MH2025",
+      date: daysAgo(5),
+    },
+    {
+      id: "session-climate-action",
+      title: "Climate Action Through Grassroots Innovation",
+      managerId: manager1Uid,
+      managerEmail: "manager1@pulse.local",
+      managerName: "Priya Sharma",
+      accessCode: "CA2025",
+      date: daysAgo(4),
+    },
+    {
+      id: "session-future-education",
+      title: "Reimagining Education for the Next Generation",
+      managerId: manager2Uid,
+      managerEmail: "manager2@pulse.local",
+      managerName: "James Okafor",
+      accessCode: "FE2025",
+      date: daysAgo(3),
+    },
+    {
+      id: "session-biotech-longevity",
+      title: "Biotech and the Science of Living Longer",
+      managerId: manager1Uid,
+      managerEmail: "manager1@pulse.local",
+      managerName: "Priya Sharma",
+      accessCode: "BL2025",
+      date: daysAgo(2),
+    },
+    {
+      id: "session-digital-democracy",
+      title: "Digital Democracy: Power, Platforms, and People",
+      managerId: manager2Uid,
+      managerEmail: "manager2@pulse.local",
+      managerName: "James Okafor",
+      accessCode: "DD2025",
       date: daysAgo(1),
     },
   ];
@@ -826,6 +864,114 @@ export const seedDummyData = onCall({ region: REGION }, async (request) => {
       { rating: 3, comment: "Some strong moments but also some generalisations that did not hold up on reflection." },
       { rating: 2, comment: "The talk oversimplified complex mental health issues. Some of the recommendations felt irresponsible without more caveats." },
     ],
+    "session-climate-action": [
+      { rating: 5, comment: "One of the most energising talks I have attended. The grassroots examples from three continents were extraordinary." },
+      { rating: 5, comment: "Refreshing to see climate action framed around community agency rather than top-down policy. Genuinely hopeful." },
+      { rating: 5, comment: "The speaker's ability to connect micro-level stories to macro-level impact is a rare and beautiful skill." },
+      { rating: 5, comment: "I left this talk with six actionable ideas. That almost never happens." },
+      { rating: 5, comment: "Standing ovation from everyone around me. The data was compelling and the delivery was magnetic." },
+      { rating: 4, comment: "Really strong. The African solar cooperative case study was the highlight. More like that, please." },
+      { rating: 4, comment: "Excellent talk. The speaker had genuine conviction. Would have liked more depth on the funding models." },
+      { rating: 4, comment: "Inspiring and well-paced. The transition to the Q&A was slightly abrupt." },
+      { rating: 4, comment: "Great content. The speaker connected technology and community in a genuinely original way." },
+      { rating: 4, comment: "Very good. The framing around 'distributed power' as both metaphor and reality was clever and memorable." },
+      { rating: 4, comment: "Solid talk. The real-world examples were vivid. A bit more statistical rigour would have helped." },
+      { rating: 4, comment: "Excellent energy throughout. The closing call to action was the strongest I have heard at any TEDx." },
+      { rating: 4, comment: "Strong presentation. The speaker answered a difficult question in the Q&A with exceptional poise." },
+      { rating: 3, comment: "Good ideas but some of the case studies felt cherry-picked. Needed more honest discussion of failures." },
+      { rating: 3, comment: "Engaging speaker but the talk lacked a clear through-line. Felt like three talks compressed into one." },
+      { rating: 3, comment: "Decent. The optimism was infectious but occasionally felt disconnected from the scale of the problem." },
+      { rating: 3, comment: "Some interesting local examples but the global conclusions felt overstated." },
+      { rating: 3, comment: "Good start, inconsistent middle, strong finish. Overall about average for a TEDx." },
+      { rating: 3, comment: "Relevant and timely but not especially original. Much of this ground has been covered elsewhere." },
+      { rating: 3, comment: "The speaker was passionate but occasionally sacrificed accuracy for a punchline." },
+      { rating: 2, comment: "The talk promised grassroots innovation but spent most of its time on well-known projects. Disappointing." },
+      { rating: 2, comment: "Felt like an advocacy piece rather than a TEDx talk. Needed more balance and depth." },
+      { rating: 2, comment: "Some compelling moments but the argument was not coherent enough to build to a convincing conclusion." },
+      { rating: 1, comment: "The speaker read directly from slides for most of the talk. The content itself was not original enough to compensate." },
+      { rating: 1, comment: "Weakest talk of the day. The examples were anecdotal, the claims were unverified, and the structure was unclear." },
+    ],
+    "session-future-education": [
+      { rating: 5, comment: "Possibly the most thought-provoking TEDx talk I have ever seen. Left wanting to overhaul my own learning approach immediately." },
+      { rating: 5, comment: "The distinction between 'learning for tests' and 'learning for life' was articulated more clearly here than anywhere I have read." },
+      { rating: 5, comment: "A genuine mind-shift in 18 minutes. The speaker is as good at teaching about teaching as you could hope for." },
+      { rating: 5, comment: "Exceptional in every dimension. The live experiment with the audience was a genuinely innovative moment." },
+      { rating: 5, comment: "I teach secondary school and this talk reminded me why I chose this profession. Thank you." },
+      { rating: 5, comment: "The evidence base was rock solid and the narrative framing was beautifully constructed." },
+      { rating: 5, comment: "Could not take notes fast enough. Every idea was both novel and immediately applicable." },
+      { rating: 4, comment: "Really strong talk. The secondary school examples were particularly resonant. More on higher education would be welcome." },
+      { rating: 4, comment: "Excellent substance. The audience participation segment slowed the pace a little but the point it made was worth it." },
+      { rating: 4, comment: "Great talk. The research citations were impressive. Slides were occasionally text-heavy." },
+      { rating: 4, comment: "Very engaging. The speaker made complex learning science genuinely accessible." },
+      { rating: 4, comment: "Strong and practical. The three-framework model will stay with me for a long time." },
+      { rating: 4, comment: "Good energy and clear structure. The call to action was specific and achievable." },
+      { rating: 4, comment: "Excellent content. The speaker was occasionally too fast in the data-heavy sections." },
+      { rating: 4, comment: "Really good. The framing around 'curiosity-first' education is something I want to bring to my team." },
+      { rating: 3, comment: "The ideas are sound but not new. The execution was competent rather than exceptional." },
+      { rating: 3, comment: "Good talk but veered into oversimplification at times. Education reform is harder than the talk implied." },
+      { rating: 3, comment: "Some excellent individual moments but the talk did not fully connect them into a coherent argument." },
+      { rating: 3, comment: "Decent. The speaker clearly knows the material but the talk needed a sharper central thesis." },
+      { rating: 3, comment: "Fine overall. The international examples were interesting but felt underdeveloped." },
+      { rating: 2, comment: "The ideas in the first five minutes were never built upon. The talk lost its thread and never found it." },
+      { rating: 2, comment: "Needed more engagement with counterarguments. The talk was one-sided in a way that undermined its credibility." },
+      { rating: 2, comment: "The live demo was a good idea that did not land. It broke the flow and the lesson it was meant to teach was unclear." },
+      { rating: 1, comment: "Felt rushed and unprepared. The speaker seemed to be working from memory rather than from a rehearsed narrative." },
+      { rating: 1, comment: "Very disappointing given the topic. Generic content, poor pacing, and no memorable takeaway." },
+    ],
+    "session-biotech-longevity": [
+      { rating: 5, comment: "Extraordinary talk. The science of cellular ageing explained with clarity and genuine excitement." },
+      { rating: 5, comment: "Left this feeling both optimistic and appropriately cautious. Rare for a talk on longevity to achieve that balance." },
+      { rating: 5, comment: "The speaker's command of the research landscape in this field is impressive. Highly credible and deeply engaging." },
+      { rating: 5, comment: "Covered the ethical dimension without being preachy. Refreshing honesty about what we do and don't yet know." },
+      { rating: 5, comment: "This is the talk I will be thinking about for weeks. The implications are staggering." },
+      { rating: 5, comment: "Phenomenal. The section on senolytics was the clearest lay explanation of the science I have encountered." },
+      { rating: 4, comment: "Excellent talk. Very strong on the science; could have spent more time on the social implications of extended lifespans." },
+      { rating: 4, comment: "Highly credible and well-delivered. The Q&A session was some of the best audience interaction of the day." },
+      { rating: 4, comment: "Really strong content. A few technical sections lost the non-scientists in the audience." },
+      { rating: 4, comment: "Great balance of aspiration and sober analysis. The discussion of access and equity was welcome and needed." },
+      { rating: 4, comment: "Very good. The speaker's personal motivation for entering the field gave it emotional depth." },
+      { rating: 4, comment: "Strong and well-paced. The closing provocation about what 'healthy longer lives' really means was perfectly timed." },
+      { rating: 3, comment: "Interesting topic but the talk was very dense. Hard to follow for those without a science background." },
+      { rating: 3, comment: "Some genuinely fascinating science here. The talk would benefit from a clearer narrative throughline." },
+      { rating: 3, comment: "Good content but the speaker spoke very quickly in the technical sections. Would benefit from being slowed down." },
+      { rating: 3, comment: "Decent. The data was impressive but the visual design of the slides made it harder to absorb than it needed to be." },
+      { rating: 3, comment: "Fair talk. The first half was excellent; the second half felt rushed as though time was running out." },
+      { rating: 2, comment: "The talk felt like an academic conference presentation rather than a TEDx talk. Needed significant reworking for a general audience." },
+      { rating: 2, comment: "Important subject, but the speaker did not adapt the content for a lay audience. Too technical throughout." },
+      { rating: 2, comment: "Lost me in the second half. The data was interesting but the argument it was meant to support was never clear." },
+      { rating: 2, comment: "Missed opportunity. The ethical questions raised in the opening were never properly addressed." },
+      { rating: 1, comment: "Way too technical and too fast. I understood perhaps 40% of what was said. Not appropriate for a general TEDx." },
+      { rating: 1, comment: "The talk made bold claims about timelines for longevity breakthroughs that felt deeply irresponsible without more caveats." },
+      { rating: 1, comment: "Uncomfortable mix of science and what felt like investment pitch. Lacked the intellectual honesty expected at TEDx." },
+      { rating: 1, comment: "One of the weakest talks I have heard here. The speaker appeared to read from a script and made no eye contact." },
+    ],
+    "session-digital-democracy": [
+      { rating: 5, comment: "Chilling and necessary. The analysis of how platforms shape political discourse was meticulous and devastating." },
+      { rating: 5, comment: "One of the most important talks at any event this year. The speaker had the courage to name the specific mechanisms of manipulation." },
+      { rating: 5, comment: "Left feeling genuinely informed rather than merely entertained. The distinction matters enormously for a topic like this." },
+      { rating: 5, comment: "The speaker managed to be simultaneously alarming and hopeful. A very difficult balance, achieved brilliantly." },
+      { rating: 5, comment: "Extraordinary depth for a short format. Every sentence was load-bearing." },
+      { rating: 4, comment: "Really strong talk. The case studies from three different democracies were well chosen and well argued." },
+      { rating: 4, comment: "Excellent analysis. The speaker was occasionally too abstract — more concrete examples would have helped." },
+      { rating: 4, comment: "Very well constructed argument. The proposed solutions felt slightly rushed but the problem diagnosis was superb." },
+      { rating: 4, comment: "Good balance of urgency and nuance. The regulatory proposals at the end were practical and grounded." },
+      { rating: 4, comment: "Strong content. The speaker dealt thoughtfully with audience pushback in the Q&A." },
+      { rating: 4, comment: "Well-researched and clearly argued. The talk benefits from being watched twice." },
+      { rating: 4, comment: "Solid. The framing of 'attention as a political resource' was a genuinely useful new lens." },
+      { rating: 3, comment: "Important topic but the talk felt too dense to fully absorb in one sitting. Needed more white space." },
+      { rating: 3, comment: "Good ideas. The speaker's academic background occasionally got in the way of the storytelling." },
+      { rating: 3, comment: "Decent. The breadth was impressive but came at the cost of depth on any individual point." },
+      { rating: 3, comment: "Some very strong moments but also some overstatements that weakened an otherwise credible argument." },
+      { rating: 3, comment: "Fair. The analysis of the problem was strong; the solutions section felt underdeveloped and generic." },
+      { rating: 3, comment: "Fine talk. The global scope was ambitious and mostly achieved, though some regional examples felt thin." },
+      { rating: 2, comment: "The talk suffered from trying to cover too much. Better to go deep on one mechanism than shallow on six." },
+      { rating: 2, comment: "The speaker was clearly knowledgeable but the presentation was disorganised. Hard to follow the core argument." },
+      { rating: 2, comment: "Left more confused than when I arrived. The talk raised important questions but answered very few of them." },
+      { rating: 2, comment: "Needed a clearer editorial hand. Too many ideas competing for attention, none fully resolved." },
+      { rating: 1, comment: "Disappointing. The first three minutes were excellent but the talk never built on that promise." },
+      { rating: 1, comment: "The framing was alarmist without the evidence to justify it. Undermined what could have been a rigorous analysis." },
+      { rating: 1, comment: "Very poor structure. It was unclear what the talk was arguing until the final minute, which is far too late." },
+    ],
   };
 
   // Create sessions and feedback
@@ -857,32 +1003,17 @@ export const seedDummyData = onCall({ region: REGION }, async (request) => {
       { merge: true },
     );
 
+    // Batch feedback writes — two writes per entry (session subcollection + mirror).
+    // 25 entries × 2 = 50 ops, well within Firestore's 500-op batch limit.
+    const feedbackBatch = db.batch();
     for (let i = 0; i < feedback.length; i++) {
       const { rating, comment } = feedback[i];
       const fUserId = i % 2 === 0 ? attendee1Uid : attendee2Uid;
+      const createdAt = feedbackTs(sessionDate, 90 + i * 5);
+      const docId = `${session.id}-seed-${i + 1}`;
 
-      await db
-        .collection("sessions")
-        .doc(session.id)
-        .collection("feedback")
-        .doc(`${session.id}-seed-${i + 1}`)
-        .set(
-          {
-            sessionId: session.id,
-            sessionTitle: session.title,
-            managerId: session.managerId,
-            userId: fUserId,
-            rating,
-            comment,
-            createdAt: feedbackTs(sessionDate, 90 + i * 5),
-            skipAggregation: true,
-            seeded: true,
-          },
-          { merge: true },
-        );
-
-      // Mirror to top-level feedback collection
-      await db.collection("feedback").doc(`${session.id}-seed-${i + 1}`).set(
+      feedbackBatch.set(
+        db.collection("sessions").doc(session.id).collection("feedback").doc(docId),
         {
           sessionId: session.id,
           sessionTitle: session.title,
@@ -890,12 +1021,29 @@ export const seedDummyData = onCall({ region: REGION }, async (request) => {
           userId: fUserId,
           rating,
           comment,
-          createdAt: feedbackTs(sessionDate, 90 + i * 5),
+          createdAt,
+          skipAggregation: true,
+          seeded: true,
+        },
+        { merge: true },
+      );
+
+      feedbackBatch.set(
+        db.collection("feedback").doc(docId),
+        {
+          sessionId: session.id,
+          sessionTitle: session.title,
+          managerId: session.managerId,
+          userId: fUserId,
+          rating,
+          comment,
+          createdAt,
           seeded: true,
         },
         { merge: true },
       );
     }
+    await feedbackBatch.commit();
 
     totalFeedbackCount += feedback.length;
     totalRatingSum += ratingSum;
@@ -935,7 +1083,7 @@ export const seedDummyData = onCall({ region: REGION }, async (request) => {
 
   return {
     ok: true,
-    message: "Demo data seeded: 4 sessions, 25 feedback each.",
+    message: "Demo data seeded: 8 sessions (4 per manager), 25 feedback each.",
     credentials: {
       password: DEMO_PASSWORD,
       users: demoUsers.map((u) => ({ email: u.email, role: u.role })),

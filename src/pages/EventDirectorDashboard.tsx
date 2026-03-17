@@ -1,70 +1,214 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
-import {
-  collection,
-  doc,
-  onSnapshot,
-} from "firebase/firestore"
+import { collection, doc, onSnapshot } from "firebase/firestore"
 import { httpsCallable } from "firebase/functions"
 
 import { db, functions } from "../services/firebase"
+import { RatingBadge } from "../components/RatingBadge"
+import { StatCard } from "../components/StatCard"
 import type { DayReportSummary, Session } from "../types"
 import { useAuth } from "../hooks/useAuth"
-
-type EventStatsState = {
-  feedbackCount: number
-  avgRating: number
-  oneStarCount: number
-}
-
-type ReportRow = {
-  id: string
-  sessionId: string
-  sessionTitle: string
-  rating: number
-  comment: string
-  managerId: string | null
-}
 
 type DayReportResult = {
   date: string
   totalFeedback: number
   summary: DayReportSummary & { sampleComments?: string[] }
-  feedback: ReportRow[]
+  feedback: Array<{
+    id: string
+    sessionId: string
+    sessionTitle: string
+    rating: number
+    comment: string
+    managerId: string | null
+  }>
 }
 
-function StatCard({ label, value, highlight = false, sub }: {
-  label: string
-  value: any
-  highlight?: boolean
-  sub?: string
-}) {
+// ─── per-manager summary ──────────────────────────────────────────────────────
+
+type ManagerRow = {
+  managerId: string
+  managerName: string
+  sessions: Session[]
+  totalFeedback: number
+  ratingSum: number
+  avgRating: number
+}
+
+function ManagerSummaryTable({ rows }: { rows: ManagerRow[] }) {
+  if (rows.length === 0) return <p className="text-sm text-zinc-400 py-4">No manager data yet</p>
+
   return (
-    <div className={`rounded-2xl border shadow-sm p-6 ${
-      highlight ? "bg-red-50 border-red-200" : "bg-white border-zinc-100"
-    }`}>
-      <p className="text-xs font-semibold uppercase tracking-widest text-zinc-400">{label}</p>
-      <p className={`mt-3 text-4xl font-black tabular-nums leading-none ${
-        highlight ? "text-red-700" : "text-zinc-900"
-      }`}>
-        {value}
-      </p>
-      {sub && <p className="mt-1.5 text-xs text-zinc-400">{sub}</p>}
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-zinc-100">
+            {["Manager", "Sessions", "Responses", "Avg ★"].map((h, i) => (
+              <th
+                key={h}
+                className={`py-2 text-xs font-semibold uppercase tracking-widest text-zinc-400 font-normal ${i === 0 ? "text-left pr-4" : "text-right px-4"}`}
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-zinc-50">
+          {rows.map((row) => (
+            <tr key={row.managerId} className="hover:bg-zinc-50 transition-colors">
+              <td className="py-3 pr-4 font-medium text-zinc-900">{row.managerName}</td>
+              <td className="py-3 px-4 text-right tabular-nums text-zinc-600">{row.sessions.length}</td>
+              <td className="py-3 px-4 text-right tabular-nums text-zinc-600">{row.totalFeedback}</td>
+              <td className="py-3 pl-4 text-right">
+                <RatingBadge avg={row.avgRating} count={row.totalFeedback} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
 
-function Leaderboard({ sessions }: { sessions: Session[] }) {
-  const rankStyle = (i: number) => {
-    if (i === 0) return "bg-yellow-100 text-yellow-700"
-    if (i === 1) return "bg-zinc-200 text-zinc-600"
-    if (i === 2) return "bg-orange-100 text-orange-700"
-    return "bg-zinc-100 text-zinc-500"
+// ─── all-sessions table ───────────────────────────────────────────────────────
+
+type SortKey = "title" | "manager" | "responses" | "avg"
+
+function AllSessionsTable({ sessions }: { sessions: Session[] }) {
+  const [sort, setSort] = useState<SortKey>("avg")
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
+  const [filterManager, setFilterManager] = useState("")
+  const [search, setSearch] = useState("")
+
+  const managers = useMemo(() => {
+    const names = new Set(sessions.map((s) => s.managerName ?? s.managerEmail ?? "Unknown"))
+    return Array.from(names).sort()
+  }, [sessions])
+
+  const sorted = useMemo(() => {
+    let list = [...sessions]
+    if (filterManager) list = list.filter((s) => (s.managerName ?? s.managerEmail) === filterManager)
+    if (search) {
+      const q = search.toLowerCase()
+      list = list.filter((s) => (s.title ?? "").toLowerCase().includes(q))
+    }
+
+    list.sort((a, b) => {
+      let diff = 0
+      if (sort === "title") diff = (a.title ?? "").localeCompare(b.title ?? "")
+      else if (sort === "manager") diff = (a.managerName ?? "").localeCompare(b.managerName ?? "")
+      else if (sort === "responses") diff = (a.totalFeedback ?? 0) - (b.totalFeedback ?? 0)
+      else diff = (a.avgRating ?? 0) - (b.avgRating ?? 0)
+      return sortDir === "asc" ? diff : -diff
+    })
+
+    return list
+  }, [sessions, sort, sortDir, filterManager, search])
+
+  function toggleSort(key: SortKey) {
+    if (sort === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"))
+    else { setSort(key); setSortDir("desc") }
   }
 
-  if (sessions.length === 0) {
-    return <p className="text-sm text-zinc-400 py-4">No sessions with feedback yet</p>
-  }
+  if (sessions.length === 0) return <p className="text-sm text-zinc-400 py-4">No sessions yet</p>
+
+  const sortIcon = (key: SortKey) => sort === key ? (sortDir === "desc" ? " ↓" : " ↑") : ""
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-3">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search sessions…"
+          className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:border-ted focus:outline-none focus:ring-2 focus:ring-ted/10 transition"
+        />
+        <select
+          value={filterManager}
+          onChange={(e) => setFilterManager(e.target.value)}
+          className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 focus:border-ted focus:outline-none focus:ring-2 focus:ring-ted/10 transition"
+        >
+          <option value="">All managers</option>
+          {managers.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <span className="ml-auto self-center text-xs text-zinc-400">
+          {sorted.length} session{sorted.length !== 1 ? "s" : ""}
+        </span>
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-zinc-100">
+        <table className="w-full text-sm">
+          <thead className="bg-zinc-50 border-b border-zinc-100">
+            <tr>
+              {(
+                [
+                  { label: "Session", key: "title" as SortKey, align: "left", extra: "pl-4 pr-2" },
+                  { label: "", key: null, align: "left", extra: "pr-4" },
+                  { label: "Manager", key: "manager" as SortKey, align: "left", extra: "px-4" },
+                  { label: "Responses", key: "responses" as SortKey, align: "right", extra: "px-4" },
+                  { label: "Avg ★", key: "avg" as SortKey, align: "right", extra: "px-4" },
+                  { label: "", key: null, align: "right", extra: "pl-4 pr-4" },
+                ] as const
+              ).map(({ label, key, align, extra }) => (
+                <th
+                  key={label + extra}
+                  className={`py-2 ${extra} text-${align} text-xs font-semibold uppercase tracking-widest text-zinc-400 font-normal ${key ? "cursor-pointer select-none hover:text-zinc-600 transition-colors" : ""}`}
+                  onClick={key ? () => toggleSort(key) : undefined}
+                >
+                  {label}{key ? sortIcon(key) : ""}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-50">
+            {sorted.map((s) => {
+              const avg = s.avgRating ?? 0
+              const count = s.totalFeedback ?? 0
+              const isLow = avg > 0 && avg < 3
+              return (
+                <tr key={s.id} className={`hover:bg-zinc-50 transition-colors ${isLow ? "bg-red-50/40" : ""}`}>
+                  <td className="py-3 pl-4 pr-2 font-medium text-zinc-900">
+                    <Link to={`/session/${s.id}`} className="hover:text-ted transition-colors">
+                      {s.title ?? "Untitled"}
+                    </Link>
+                  </td>
+                  <td className="py-3 pr-4">
+                    {isLow && (
+                      <span className="text-xs text-red-600 font-semibold bg-red-100 rounded-full px-2 py-0.5">
+                        ⚠ At risk
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-3 px-4 text-zinc-500">{s.managerName ?? s.managerEmail ?? "—"}</td>
+                  <td className="py-3 px-4 text-right tabular-nums text-zinc-600">{count}</td>
+                  <td className="py-3 px-4 text-right">
+                    <RatingBadge avg={avg} count={count} />
+                  </td>
+                  <td className="py-3 pl-4 pr-4 text-right">
+                    <Link to={`/session/${s.id}`} className="text-xs font-semibold text-zinc-500 hover:text-ted transition-colors">
+                      View →
+                    </Link>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ─── leaderboard + at-risk ────────────────────────────────────────────────────
+
+function Leaderboard({ sessions }: { sessions: Session[] }) {
+  if (sessions.length === 0) return <p className="text-sm text-zinc-400 py-4">No sessions with feedback yet</p>
+
+  const rankStyle = (i: number) =>
+    i === 0 ? "bg-yellow-100 text-yellow-700" :
+    i === 1 ? "bg-zinc-200 text-zinc-600" :
+    i === 2 ? "bg-orange-100 text-orange-700" :
+    "bg-zinc-100 text-zinc-500"
 
   return (
     <ul className="divide-y divide-zinc-100">
@@ -79,7 +223,7 @@ function Leaderboard({ sessions }: { sessions: Session[] }) {
             </Link>
             <p className="text-xs text-zinc-400">{s.managerName ?? "—"} · {s.totalFeedback ?? 0} responses</p>
           </div>
-          <span className="shrink-0 font-bold text-zinc-900 text-sm">
+          <span className="shrink-0 font-bold text-zinc-900 text-sm tabular-nums">
             {(s.avgRating ?? 0).toFixed(2)} ★
           </span>
         </li>
@@ -96,7 +240,6 @@ function AtRiskList({ sessions }: { sessions: Session[] }) {
       </div>
     )
   }
-
   return (
     <ul className="space-y-2">
       {sessions.map((s) => (
@@ -108,7 +251,7 @@ function AtRiskList({ sessions }: { sessions: Session[] }) {
             </Link>
             <p className="text-xs text-red-600">{s.managerName ?? "—"} · {s.totalFeedback ?? 0} responses</p>
           </div>
-          <span className="shrink-0 font-bold text-red-700 text-sm">
+          <span className="shrink-0 font-bold text-red-700 text-sm tabular-nums">
             {(s.avgRating ?? 0).toFixed(2)} ★
           </span>
         </li>
@@ -116,6 +259,8 @@ function AtRiskList({ sessions }: { sessions: Session[] }) {
     </ul>
   )
 }
+
+// ─── main page ────────────────────────────────────────────────────────────────
 
 export default function EventDirectorDashboard() {
   const { user, loading: authLoading } = useAuth()
@@ -129,58 +274,72 @@ export default function EventDirectorDashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [oneStarAlert, setOneStarAlert] = useState<string | null>(null)
-  const [liveFeedbackStats, setLiveFeedbackStats] = useState<Record<string, { count: number; ratingSum: number; oneStarCount: number }>>({})
+  const [liveFeedbackStats, setLiveFeedbackStats] = useState<
+    Record<string, { count: number; ratingSum: number; oneStarCount: number }>
+  >({})
 
-  // Wait for auth before subscribing so rules always have a valid token
+  // Track alert timeout so it can be cleared on unmount
+  const alertTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Keep a ref so the live-feedback effect can read current sessions without
+  // adding the array itself to deps (which would thrash all listeners on every snapshot).
+  const allSessionsRef = useRef<Session[]>([])
+
   useEffect(() => {
     if (!user) { setLoading(false); return }
-
     setLoading(true)
 
-    // Single subscription for all sessions — derive leaderboard, at-risk, and stats client-side
     const unsubSessions = onSnapshot(
       collection(db, "sessions"),
       (snap) => {
-        setAllSessions(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Session))
+        const next = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Session)
+        allSessionsRef.current = next
+        setAllSessions(next)
         setLoading(false)
       },
       (err) => { setError(err.message || "Unable to load sessions"); setLoading(false) },
     )
 
-    // Keep eventStats/global for the 1-star real-time alert (CF-updated)
-    const statsRef = doc(db, "eventStats", "global")
     let prevOneStarCount = 0
     let hasInit = false
+    const unsubStats = onSnapshot(
+      doc(db, "eventStats", "global"),
+      (snap) => {
+        if (!snap.data()) return
+        const next = Number(snap.data()!.oneStarCount ?? 0)
+        if (hasInit && next > prevOneStarCount) {
+          const delta = next - prevOneStarCount
+          setOneStarAlert(`${delta} new 1-star rating${delta > 1 ? "s" : ""} just arrived`)
+          if (alertTimeoutRef.current) clearTimeout(alertTimeoutRef.current)
+          alertTimeoutRef.current = setTimeout(() => setOneStarAlert(null), 8000)
+        }
+        hasInit = true
+        prevOneStarCount = next
+      },
+      (err) => console.error("eventStats listener failed", err),
+    )
 
-    const unsubStats = onSnapshot(statsRef, (snap) => {
-      const data = snap.data()
-      if (!data) return
-      const next: EventStatsState = {
-        feedbackCount: Number(data.feedbackCount ?? 0),
-        avgRating: Number(data.avgRating ?? 0),
-        oneStarCount: Number(data.oneStarCount ?? 0),
-      }
-      if (hasInit && next.oneStarCount > prevOneStarCount) {
-        const delta = next.oneStarCount - prevOneStarCount
-        setOneStarAlert(`${delta} new 1-star rating${delta > 1 ? "s" : ""} just arrived`)
-        setTimeout(() => setOneStarAlert(null), 8000)
-      }
-      hasInit = true
-      prevOneStarCount = next.oneStarCount
-    })
-
-    return () => { unsubSessions(); unsubStats() }
+    return () => {
+      unsubSessions()
+      unsubStats()
+      if (alertTimeoutRef.current) clearTimeout(alertTimeoutRef.current)
+    }
   }, [user])
 
-  // Subscribe to each session's feedback subcollection for live counts/averages.
-  // This ensures stats are accurate even when Cloud Functions haven't updated session aggregates yet.
-  useEffect(() => {
-    if (allSessions.length === 0) {
-      setLiveFeedbackStats({})
-      return
-    }
+  // Stable string of session IDs — prevents re-subscribing all per-session listeners
+  // just because onSnapshot returned a new array reference with the same contents.
+  const sessionIdKey = useMemo(
+    () => allSessions.map((s) => s.id).sort().join(","),
+    [allSessions],
+  )
 
-    const unsubs = allSessions.map((session) =>
+  // Live per-session feedback counts — one listener per session.
+  // Depends on sessionIdKey (stable string) rather than the allSessions array so
+  // listeners are only torn down/recreated when the actual set of session IDs changes.
+  useEffect(() => {
+    const current = allSessionsRef.current
+    if (current.length === 0) { setLiveFeedbackStats({}); return }
+
+    const unsubs = current.map((session) =>
       onSnapshot(
         collection(db, "sessions", session.id, "feedback"),
         (snap) => {
@@ -189,13 +348,15 @@ export default function EventDirectorDashboard() {
           const oneStarCount = snap.docs.filter((d) => Number(d.data().rating) === 1).length
           setLiveFeedbackStats((prev) => ({ ...prev, [session.id]: { count, ratingSum, oneStarCount } }))
         },
+        (err) => console.error("feedback listener failed for", session.id, err),
       )
     )
 
     return () => unsubs.forEach((u) => u())
-  }, [allSessions])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionIdKey])
 
-  // Merge live feedback counts into session objects so all derived lists stay in sync
+  // Merge live feedback stats into session objects
   const allSessionsWithLive = useMemo(() =>
     allSessions.map((s) => {
       const live = liveFeedbackStats[s.id]
@@ -222,8 +383,31 @@ export default function EventDirectorDashboard() {
     [allSessionsWithLive],
   )
 
-  // Global stats derived from live per-session feedback data
-  const liveStats = useMemo((): EventStatsState => {
+  const managerRows = useMemo((): ManagerRow[] => {
+    const map = new Map<string, ManagerRow>()
+    for (const s of allSessionsWithLive) {
+      const mId = s.managerId ?? "unknown"
+      const existing = map.get(mId) ?? {
+        managerId: mId,
+        managerName: s.managerName ?? s.managerEmail ?? "Unknown",
+        sessions: [],
+        totalFeedback: 0,
+        ratingSum: 0,
+        avgRating: 0,
+      }
+      existing.sessions.push(s)
+      existing.totalFeedback += s.totalFeedback ?? 0
+      existing.ratingSum += s.ratingSum ?? 0
+      existing.avgRating =
+        existing.totalFeedback > 0
+          ? Number((existing.ratingSum / existing.totalFeedback).toFixed(2))
+          : 0
+      map.set(mId, existing)
+    }
+    return [...map.values()].sort((a, b) => b.avgRating - a.avgRating)
+  }, [allSessionsWithLive])
+
+  const liveStats = useMemo(() => {
     const feedbackCount = allSessionsWithLive.reduce((s, sess) => s + (sess.totalFeedback ?? 0), 0)
     const ratingSum = allSessionsWithLive.reduce((s, sess) => s + (sess.ratingSum ?? 0), 0)
     const oneStarCount = Object.values(liveFeedbackStats).reduce((s, st) => s + st.oneStarCount, 0)
@@ -233,11 +417,6 @@ export default function EventDirectorDashboard() {
       oneStarCount,
     }
   }, [allSessionsWithLive, liveFeedbackStats])
-
-  const formattedAvg = useMemo(
-    () => liveStats.feedbackCount > 0 ? liveStats.avgRating.toFixed(2) : "—",
-    [liveStats],
-  )
 
   async function handleGenerateReport() {
     setError(null)
@@ -260,7 +439,7 @@ export default function EventDirectorDashboard() {
     try {
       const fn = httpsCallable(functions, "seedDummyData")
       const result: any = await fn({})
-      setSeedMessage(`Seeded successfully · Password: ${result.data.credentials.password}`)
+      setSeedMessage(`Seeded · Password: ${result.data.credentials.password}`)
     } catch {
       setError("Unable to seed demo data")
     } finally {
@@ -270,9 +449,8 @@ export default function EventDirectorDashboard() {
 
   function handleDownloadReport() {
     if (!reportData) return
-
     const lines = [
-      `EFP · Event Feedback Report`,
+      `TEDx Event Feedback Report`,
       `Date: ${reportData.date}`,
       `Total Feedback: ${reportData.totalFeedback}`,
       "",
@@ -286,12 +464,11 @@ export default function EventDirectorDashboard() {
         (f, i) => `${i + 1}. [${f.sessionTitle}] (${f.rating}★)\n   ${f.comment}`,
       ),
     ]
-
     const blob = new Blob([lines.join("\n")], { type: "text/plain" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = `pulse-report-${reportData.date}.txt`
+    a.download = `tedx-feedback-${reportData.date}.txt`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -304,9 +481,7 @@ export default function EventDirectorDashboard() {
 
       {/* Header */}
       <div>
-        <p className="text-xs font-semibold uppercase tracking-widest text-ted mb-1">
-          Event Director
-        </p>
+        <p className="text-xs font-semibold uppercase tracking-widest text-ted mb-1">Event Director</p>
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-3xl font-black text-zinc-900 tracking-tight">
@@ -315,16 +490,10 @@ export default function EventDirectorDashboard() {
             <p className="text-sm text-zinc-500 mt-1">Real-time event analytics</p>
           </div>
           <div className="flex gap-2 shrink-0 pt-1">
-            <Link
-              to="/director/sessions"
-              className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-700 transition-colors"
-            >
+            <Link to="/director/sessions" className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-700 transition-colors">
               Sessions
             </Link>
-            <Link
-              to="/director/roles"
-              className="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 transition-colors"
-            >
+            <Link to="/director/roles" className="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 transition-colors">
               Roles
             </Link>
           </div>
@@ -348,44 +517,62 @@ export default function EventDirectorDashboard() {
         </div>
       )}
 
-      {/* Stats */}
+      {/* Top-level stats */}
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard label="Total Responses" value={liveStats.feedbackCount || "—"} sub="event-wide" />
-        <StatCard label="Overall Average" value={formattedAvg} sub="weighted across all sessions" />
-        <StatCard label="1-Star Ratings" value={liveStats.oneStarCount || "—"} highlight={liveStats.oneStarCount > 0} sub="requires attention" />
+        <StatCard
+          label="Overall Average"
+          value={liveStats.feedbackCount > 0 ? liveStats.avgRating.toFixed(2) : "—"}
+          sub="weighted across all sessions"
+        />
+        <StatCard
+          label="1-Star Ratings"
+          value={liveStats.oneStarCount || "—"}
+          highlight={liveStats.oneStarCount > 0}
+          sub="requires attention"
+        />
       </div>
 
-      {/* Leaderboard + At Risk side by side */}
+      {/* Per-manager breakdown */}
+      <div className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-6">
+        <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400 mb-4">
+          Manager Performance
+        </h2>
+        {loading ? <p className="text-sm text-zinc-400">Loading…</p> : <ManagerSummaryTable rows={managerRows} />}
+      </div>
+
+      {/* Leaderboard + At Risk */}
       <div className="grid gap-4 lg:grid-cols-2">
-
         <div className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-6">
-          <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400 mb-4">
-            Top Sessions
-          </h2>
-          {loading ? (
-            <p className="text-sm text-zinc-400">Loading…</p>
-          ) : (
-            <Leaderboard sessions={topSessions} />
-          )}
+          <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400 mb-4">Top Sessions</h2>
+          {loading ? <p className="text-sm text-zinc-400">Loading…</p> : <Leaderboard sessions={topSessions} />}
         </div>
-
         <div className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-6">
           <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400 mb-4">
-            At Risk  <span className="text-red-500">· avg &lt; 3.0</span>
+            At Risk <span className="text-red-500">· avg &lt; 3.0</span>
           </h2>
           <AtRiskList sessions={atRiskSessions} />
         </div>
-
       </div>
 
-      {/* Day Report */}
-      <div className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-6 space-y-4">
+      {/* All sessions drill-down */}
+      <div className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-6">
+        <div className="flex items-center justify-between mb-5">
+          <div>
+            <h2 className="text-sm font-semibold text-zinc-900">All Sessions</h2>
+            <p className="text-xs text-zinc-400 mt-0.5">Click any session to drill into its feedback</p>
+          </div>
+          <span className="text-xs text-zinc-400">{allSessionsWithLive.length} total</span>
+        </div>
+        {loading ? <p className="text-sm text-zinc-400">Loading…</p> : <AllSessionsTable sessions={allSessionsWithLive} />}
+      </div>
 
+      {/* Day Feedback Report */}
+      <div className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-6 space-y-4">
         <div>
           <h2 className="text-sm font-semibold text-zinc-900">Day Feedback Report</h2>
           <p className="text-xs text-zinc-400 mt-0.5">AI-generated summary with all feedback for a selected date</p>
         </div>
-
         <div className="flex flex-wrap gap-3 items-center">
           <input
             type="date"
@@ -408,36 +595,34 @@ export default function EventDirectorDashboard() {
             Download .txt
           </button>
         </div>
-
         {reportData && (
           <div className="rounded-xl bg-zinc-50 border border-zinc-200 p-5 space-y-3">
             <p className="text-xs font-semibold uppercase tracking-widest text-zinc-400">
               {reportData.date} · {reportData.totalFeedback} feedback entries
             </p>
             <div className="space-y-2">
-              <div className="flex gap-2">
-                <span className="text-green-600 text-sm shrink-0 mt-0.5">✓</span>
-                <p className="text-sm text-zinc-700"><span className="font-semibold">Went well:</span> {reportData.summary.wentWell}</p>
-              </div>
-              <div className="flex gap-2">
-                <span className="text-red-500 text-sm shrink-0 mt-0.5">✗</span>
-                <p className="text-sm text-zinc-700"><span className="font-semibold">Issues:</span> {reportData.summary.didntGoWell}</p>
-              </div>
-              <div className="flex gap-2">
-                <span className="text-ted text-sm shrink-0 mt-0.5">→</span>
-                <p className="text-sm text-zinc-700"><span className="font-semibold">Recommendation:</span> {reportData.summary.recommendation}</p>
-              </div>
+              {[
+                { icon: "✓", color: "text-green-600", label: "Went well", text: reportData.summary.wentWell },
+                { icon: "✗", color: "text-red-500", label: "Issues", text: reportData.summary.didntGoWell },
+                { icon: "→", color: "text-ted", label: "Recommendation", text: reportData.summary.recommendation },
+              ].map(({ icon, color, label, text }) => (
+                <div key={label} className="flex gap-2">
+                  <span className={`${color} text-sm shrink-0 mt-0.5`}>{icon}</span>
+                  <p className="text-sm text-zinc-700">
+                    <span className="font-semibold">{label}:</span> {text}
+                  </p>
+                </div>
+              ))}
             </div>
           </div>
         )}
-
       </div>
 
       {/* Seed section */}
       <div className="bg-white rounded-2xl border border-dashed border-zinc-200 p-6">
         <h2 className="text-sm font-semibold text-zinc-900">Seed Demo Data</h2>
         <p className="text-xs text-zinc-400 mt-1 mb-4">
-          Creates 4 sessions with 25 realistic feedback entries each and 365-day history.
+          Creates 2 managers · 4 sessions each · 25 feedback per session · 365-day history.
         </p>
         <button
           onClick={handleSeedDemoData}
@@ -446,9 +631,7 @@ export default function EventDirectorDashboard() {
         >
           {isSeeding ? "Seeding…" : "Run Seed"}
         </button>
-        {seedMessage && (
-          <p className="mt-3 text-sm text-green-600 font-medium">{seedMessage}</p>
-        )}
+        {seedMessage && <p className="mt-3 text-sm text-green-600 font-medium">{seedMessage}</p>}
       </div>
 
     </div>

@@ -24,6 +24,15 @@ async function requireEventDirector(uid: string): Promise<void> {
   }
 }
 
+async function requireManagerOrDirector(uid: string): Promise<void> {
+  const userDoc = await db.collection("users").doc(uid).get();
+  const role = userDoc.exists ? userDoc.data()?.role : null;
+
+  if (role !== "eventDirector" && role !== "stageManager") {
+    throw new HttpsError("permission-denied", "Only managers and event directors can perform this action.");
+  }
+}
+
 export const handleUserCreated = user().onCreate(async (userRecord) => {
 
   const userRef = db.collection("users").doc(userRecord.uid);
@@ -127,6 +136,7 @@ export const onFeedbackCreated = onDocumentCreated(
     const feedback = snapshot.data();
     if (!feedback) return;
 
+    //mirror feedback to a root-level collection for easier querying and aggregation
     await db.collection("feedback").doc(feedbackId).set({
       sessionId,
       sessionTitle: String(feedback.sessionTitle ?? "Untitled"),
@@ -174,6 +184,7 @@ export const onFeedbackCreated = onDocumentCreated(
         ratingSum: nextSum,
         totalFeedback: nextTotal,
         avgRating: Number((nextSum / nextTotal).toFixed(2)),
+        lastFeedbackAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       tx.set(
@@ -329,6 +340,87 @@ Return ONLY JSON:
   }
 }
 
+export const generateSessionReport = onCall(
+  {
+    region: REGION,
+    secrets: [GEMINI_API_KEY],
+  },
+  async (request) => {
+
+    const auth = request.auth;
+    const data = request.data as { sessionId?: string };
+
+    if (!auth?.uid) {
+      throw new HttpsError("unauthenticated", "Authentication required.");
+    }
+
+    await requireManagerOrDirector(auth.uid);
+
+    const sessionId = String(data?.sessionId ?? "").trim();
+    if (!sessionId) {
+      throw new HttpsError("invalid-argument", "sessionId is required.");
+    }
+
+    // Step 1: Read the session for its aggregate counts.
+    const sessionSnap = await db.collection("sessions").doc(sessionId).get();
+    if (!sessionSnap.exists) {
+      throw new HttpsError("not-found", "Session not found.");
+    }
+
+    const session = sessionSnap.data()!;
+    const currentFeedbackCount = Number(session.totalFeedback ?? 0);
+    const sessionTitle = String(session.title ?? "Untitled");
+
+    if (currentFeedbackCount === 0) {
+      return { sessionId, sessionTitle, totalFeedback: 0, summary: buildSummary([], []) };
+    }
+
+    // Step 2: Return cached report if feedbackCount has not changed.
+    const reportRef = db.collection("reports").doc(sessionId);
+    const cachedSnap = await reportRef.get();
+
+    if (cachedSnap.exists && Number(cachedSnap.data()?.feedbackCount) === currentFeedbackCount) {
+      logger.info("Returning cached report for session", sessionId);
+      return {
+        sessionId,
+        sessionTitle,
+        totalFeedback: currentFeedbackCount,
+        summary: cachedSnap.data()!.summary,
+      };
+    }
+
+    // Step 3: Cache is stale — fetch feedback from the session's subcollection.
+    const feedbackSnap = await db
+      .collection("sessions")
+      .doc(sessionId)
+      .collection("feedback")
+      .get();
+
+    const comments: string[] = [];
+    const ratings: number[] = [];
+
+    feedbackSnap.docs.forEach((doc) => {
+      const row = doc.data();
+      const comment = String(row.comment ?? "").trim();
+      const rating = Number(row.rating ?? 0);
+      if (comment) comments.push(comment);
+      ratings.push(rating);
+    });
+
+    const summary = await buildAISummary(comments, ratings, GEMINI_API_KEY.value());
+
+    // Step 4: Persist cache so the next call for this session is instant.
+    await reportRef.set({
+      sessionId,
+      feedbackCount: currentFeedbackCount,
+      summary,
+      generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return { sessionId, sessionTitle, totalFeedback: currentFeedbackCount, summary };
+  },
+);
+
 export const generateDayFeedbackReport = onCall(
   {
     region: REGION,
@@ -354,42 +446,66 @@ export const generateDayFeedbackReport = onCall(
     const start = admin.firestore.Timestamp.fromDate(new Date(`${date}T00:00:00Z`));
     const end = admin.firestore.Timestamp.fromDate(new Date(`${date}T23:59:59Z`));
 
-    const feedbackSnapshot = await db
-      .collection("feedback")
-      .where("createdAt", ">=", start)
-      .where("createdAt", "<=", end)
+    // Find sessions that ran on this date using startedAt.
+    const sessionsSnap = await db
+      .collection("sessions")
+      .where("startedAt", ">=", start)
+      .where("startedAt", "<=", end)
       .get();
 
-    const feedbackItems: any[] = [];
+    if (sessionsSnap.empty) {
+      return { date, totalFeedback: 0, summary: buildSummary([], []), feedback: [] };
+    }
 
-    feedbackSnapshot.docs.forEach((doc) => {
+    // Sum totalFeedback from session aggregates — zero extra reads needed.
+    const sessionIds = sessionsSnap.docs.map((doc) => doc.id);
+    const currentFeedbackCount = sessionsSnap.docs.reduce(
+      (sum, doc) => sum + Number(doc.data().totalFeedback ?? 0),
+      0,
+    );
 
-      const row = doc.data();
+    // Return cached report if feedbackCount has not changed.
+    const reportRef = db.collection("dayReports").doc(date);
+    const cachedSnap = await reportRef.get();
 
-      feedbackItems.push({
-        id: doc.id,
-        sessionId: row.sessionId,
-        sessionTitle: row.sessionTitle ?? "Untitled",
-        rating: Number(row.rating ?? 0),
-        comment: String(row.comment ?? ""),
+    if (cachedSnap.exists && Number(cachedSnap.data()?.feedbackCount) === currentFeedbackCount) {
+      logger.info("Returning cached day report for", date);
+      const cached = cachedSnap.data()!;
+      return { date, totalFeedback: currentFeedbackCount, summary: cached.summary, feedback: [] };
+    }
+
+    // Cache is stale — fetch full feedback for AI summary.
+    const feedbackItems: { id: string; sessionId: string; sessionTitle: string; rating: number; comment: string }[] = [];
+    const CHUNK = 30;
+
+    for (let i = 0; i < sessionIds.length; i += CHUNK) {
+      const chunk = sessionIds.slice(i, i + CHUNK);
+      const snap = await db.collection("feedback").where("sessionId", "in", chunk).get();
+      snap.docs.forEach((doc) => {
+        const row = doc.data();
+        feedbackItems.push({
+          id: doc.id,
+          sessionId: String(row.sessionId ?? ""),
+          sessionTitle: String(row.sessionTitle ?? "Untitled"),
+          rating: Number(row.rating ?? 0),
+          comment: String(row.comment ?? ""),
+        });
       });
-    });
+    }
 
     const comments = feedbackItems.map((i) => i.comment).filter(Boolean);
     const ratings = feedbackItems.map((i) => i.rating);
 
-    const summary = await buildAISummary(
-      comments,
-      ratings,
-      GEMINI_API_KEY.value(),
-    );
+    const summary = await buildAISummary(comments, ratings, GEMINI_API_KEY.value());
 
-    return {
+    await reportRef.set({
       date,
-      totalFeedback: feedbackItems.length,
+      feedbackCount: currentFeedbackCount,
       summary,
-      feedback: feedbackItems,
-    };
+      generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return { date, totalFeedback: currentFeedbackCount, summary, feedback: feedbackItems };
   },
 );
 
@@ -553,7 +669,7 @@ export const deleteSessionCascade = onCall({ region: REGION }, async (request) =
       const nextCount = Math.max(0, prevGlobalCount - deletedFeedbackCount);
       const nextSum = Math.max(0, prevGlobalSum - deletedRatingSum);
       const nextOneStar = Math.max(0, prevOneStar - deletedOneStarCount);
-
+      // global
       tx.set(
         statsRef,
         {

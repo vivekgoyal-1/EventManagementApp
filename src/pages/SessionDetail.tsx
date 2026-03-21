@@ -7,8 +7,10 @@ import {
   onSnapshot,
 } from "firebase/firestore"
 
-import { db } from "../services/firebase"
+import { db, functions } from "../services/firebase"
+import { httpsCallable } from "firebase/functions"
 import type { Feedback, Session } from "../types"
+import type { DayReportSummary } from "../types"
 import { useAuth } from "../hooks/useAuth"
 import { toDate } from "../lib/utils"
 
@@ -201,6 +203,8 @@ export default function SessionDetail() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [ratingFilter, setRatingFilter] = useState<RatingFilter>("all")
+  const [reportData, setReportData] = useState<{ sessionTitle: string; totalFeedback: number; summary: DayReportSummary & { sampleComments?: string[] } } | null>(null)
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false)
 
   useEffect(() => {
     if (!sessionId) return
@@ -259,6 +263,44 @@ export default function SessionDetail() {
   )
 
   // ── Early auth guards (after all hooks) ───────────────────────────────────────
+
+  async function handleGenerateReport() {
+    if (!sessionId) return
+    setIsGeneratingReport(true)
+    setError(null)
+    try {
+      const fn = httpsCallable<{ sessionId: string }, typeof reportData>(functions, "generateSessionReport")
+      const result = await fn({ sessionId })
+      setReportData(result.data as any)
+    } catch {
+      setError("Unable to generate report. Check that the Gemini API key is configured.")
+    } finally {
+      setIsGeneratingReport(false)
+    }
+  }
+
+  function handleDownloadReport() {
+    if (!reportData || !session) return
+    const lines = [
+      `TEDx Session Feedback Report`,
+      `Session: ${session.title}`,
+      `Total Feedback: ${reportData.totalFeedback}`,
+      "",
+      "── AI SUMMARY ──────────────────────────",
+      `What went well: ${reportData.summary.wentWell}`,
+      `What didn't go well: ${reportData.summary.didntGoWell}`,
+      `Recommendation: ${reportData.summary.recommendation}`,
+    ]
+    const blob = new Blob([lines.join("\n")], { type: "text/plain" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `tedx-report-${session.title.replace(/\s+/g, "-").toLowerCase()}.txt`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
 
   if (authLoading) return null
   if (!user) return <Navigate to="/" replace />
@@ -352,6 +394,56 @@ export default function SessionDetail() {
               <p className="mt-2 text-3xl font-black text-zinc-900 tabular-nums">{stat.value}</p>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* AI Report — event director only */}
+      {(user.role === "eventDirector" || user.role === "stageManager") && (
+        <div className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-6 space-y-4">
+          <div>
+            <h2 className="text-sm font-semibold text-zinc-900">AI Feedback Report</h2>
+            <p className="text-xs text-zinc-400 mt-0.5">Generate an AI summary of all feedback for this session</p>
+          </div>
+          <div className="flex flex-wrap gap-3 items-center">
+            <button
+              onClick={handleGenerateReport}
+              disabled={isGeneratingReport || feedback.length === 0}
+              className="rounded-xl bg-ted px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-60 transition"
+            >
+              {isGeneratingReport ? "Generating…" : "Generate Report"}
+            </button>
+            <button
+              onClick={handleDownloadReport}
+              disabled={!reportData}
+              className="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 transition"
+            >
+              Download .txt
+            </button>
+            {feedback.length === 0 && (
+              <p className="text-xs text-zinc-400">No feedback to report on yet</p>
+            )}
+          </div>
+          {reportData && (
+            <div className="rounded-xl bg-zinc-50 border border-zinc-200 p-5 space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-widest text-zinc-400">
+                {reportData.totalFeedback} feedback entries
+              </p>
+              <div className="space-y-2">
+                {[
+                  { icon: "✓", color: "text-green-600", label: "Went well", text: reportData.summary.wentWell },
+                  { icon: "✗", color: "text-red-500", label: "Issues", text: reportData.summary.didntGoWell },
+                  { icon: "→", color: "text-ted", label: "Recommendation", text: reportData.summary.recommendation },
+                ].map(({ icon, color, label, text }) => (
+                  <div key={label} className="flex gap-2">
+                    <span className={`${color} text-sm shrink-0 mt-0.5`}>{icon}</span>
+                    <p className="text-sm text-zinc-700">
+                      <span className="font-semibold">{label}:</span> {text}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -468,6 +560,7 @@ export default function SessionDetail() {
           </ul>
         )}
       </div>
+
 
     </div>
   )

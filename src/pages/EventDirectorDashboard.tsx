@@ -13,14 +13,7 @@ type DayReportResult = {
   date: string
   totalFeedback: number
   summary: DayReportSummary & { sampleComments?: string[] }
-  feedback: Array<{
-    id: string
-    sessionId: string
-    sessionTitle: string
-    rating: number
-    comment: string
-    managerId: string | null
-  }>
+  feedback: Array<{ id: string; sessionId: string; sessionTitle: string; rating: number; comment: string }>
 }
 
 // ─── per-manager summary ──────────────────────────────────────────────────────
@@ -353,7 +346,7 @@ export default function EventDirectorDashboard() {
     )
 
     return () => unsubs.forEach((u) => u())
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  
   }, [sessionIdKey])
 
   // Merge live feedback stats into session objects
@@ -424,20 +417,6 @@ export default function EventDirectorDashboard() {
     }
   }, [allSessionsWithLive, liveFeedbackStats])
 
-  async function handleGenerateReport() {
-    setError(null)
-    setIsGeneratingReport(true)
-    try {
-      const fn = httpsCallable<{ date: string }, DayReportResult>(functions, "generateDayFeedbackReport")
-      const result = await fn({ date: reportDate })
-      setReportData(result.data)
-    } catch {
-      setError("Unable to generate report. Check that the Gemini API key is configured.")
-    } finally {
-      setIsGeneratingReport(false)
-    }
-  }
-
   async function handleSeedDemoData() {
     setError(null)
     setSeedMessage(null)
@@ -450,6 +429,20 @@ export default function EventDirectorDashboard() {
       setError("Unable to seed demo data")
     } finally {
       setIsSeeding(false)
+    }
+  }
+
+  async function handleGenerateReport() {
+    setError(null)
+    setIsGeneratingReport(true)
+    try {
+      const fn = httpsCallable<{ date: string }, DayReportResult>(functions, "generateDayFeedbackReport")
+      const result = await fn({ date: reportDate })
+      setReportData(result.data)
+    } catch {
+      setError("Unable to generate report. Check that the Gemini API key is configured.")
+    } finally {
+      setIsGeneratingReport(false)
     }
   }
 
@@ -466,9 +459,7 @@ export default function EventDirectorDashboard() {
       `Recommendation: ${reportData.summary.recommendation}`,
       "",
       "── FEEDBACK ENTRIES ─────────────────────",
-      ...reportData.feedback.map(
-        (f, i) => `${i + 1}. [${f.sessionTitle}] (${f.rating}★)\n   ${f.comment}`,
-      ),
+      ...reportData.feedback.map((f, i) => `${i + 1}. [${f.sessionTitle}] (${f.rating}★)\n   ${f.comment}`),
     ]
     const blob = new Blob([lines.join("\n")], { type: "text/plain" })
     const url = URL.createObjectURL(blob)
@@ -579,7 +570,7 @@ export default function EventDirectorDashboard() {
       <div className="bg-white rounded-2xl border border-zinc-100 shadow-sm p-6 space-y-4">
         <div>
           <h2 className="text-sm font-semibold text-zinc-900">Day Feedback Report</h2>
-          <p className="text-xs text-zinc-400 mt-0.5">AI-generated summary with all feedback for a selected date</p>
+          <p className="text-xs text-zinc-400 mt-0.5">AI-generated summary of all feedback for a selected date</p>
         </div>
         <div className="flex flex-wrap gap-3 items-center">
           <input
